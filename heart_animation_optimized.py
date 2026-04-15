@@ -1,0 +1,422 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+import tkinter as tk
+import math
+import random
+import colorsys
+
+# ==================== Matplotlib 版本 ====================
+
+class MatplotlibHeartAnimation:
+    def __init__(self, width=800, height=600, fps=30, duration=10):
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.duration = duration
+        self.total_frames = fps * duration
+        
+        # 设置参数
+        self.WIDTH, self.HEIGHT = width, height
+        self.FPS = fps
+        self.DURATION = duration
+        self.TOTAL_FRAMES = self.total_frames
+
+        # 创建图像和轴
+        self.fig, self.ax = plt.subplots(figsize=(width/100, height/100), dpi=100)
+        self.ax.set_xlim(0, width)
+        self.ax.set_ylim(0, height)
+        self.ax.set_facecolor('black')
+        self.fig.patch.set_facecolor('black')
+
+        # 关闭坐标轴
+        self.ax.axis('off')
+        
+        # 初始化粒子
+        self.heart_x, self.heart_y, self.heart_sizes, self.heart_colors, self.heart_alphas = self.generate_heart_particles()
+        self.wave_x, self.wave_y, self.wave_sizes, self.wave_colors, self.wave_alphas = self.generate_wave_particles()
+
+        # 创建散点图对象
+        self.heart_scat = self.ax.scatter(self.heart_x, self.heart_y, c=self.heart_colors, s=self.heart_sizes, alpha=self.heart_alphas, edgecolors='none')
+        self.wave_scat = self.ax.scatter(self.wave_x, self.wave_y, c=self.wave_colors, s=self.wave_sizes, alpha=self.wave_alphas, edgecolors='none')
+        
+    def hsv_to_rgb(self, h, s, v):
+        """将HSV颜色值转换为RGB元组"""
+        r, g, b = colorsys.hsv_to_rgb(h, s, v)
+        return (r, g, b)
+        
+    def generate_heart_particles(self, num_particles=600):
+        """生成心形粒子（优化版本）"""
+        # 使用参数方程生成心形
+        t = np.linspace(0, 2*np.pi, num_particles*3)
+        
+        # 计算心形坐标
+        x = 16 * np.sin(t)**3
+        y = 13 * np.cos(t) - 5 * np.cos(2*t) - 2 * np.cos(3*t) - np.cos(4*t)
+        
+        # 缩放和平移到屏幕中心
+        x = x * 10 + self.WIDTH // 2
+        y = y * 10 + self.HEIGHT // 2 - 50
+        
+        # 随机采样以减少点数到目标数量
+        indices = np.random.choice(len(x), num_particles, replace=False)
+        x = x[indices]
+        y = y[indices]
+        
+        # 添加随机偏移（±2像素）
+        x += np.random.uniform(-2, 2, num_particles)
+        y += np.random.uniform(-2, 2, num_particles)
+        
+        # 生成随机大小（5-15像素）
+        sizes = np.random.uniform(5, 15, num_particles)
+        
+        # 生成颜色（粉红色系，使用HSV色彩空间）
+        colors = []
+        for _ in range(num_particles):
+            hue = random.uniform(0.9, 1.0)  # 红色系
+            saturation = random.uniform(0.8, 1.0)
+            value = random.uniform(0.7, 1.0)
+            rgb = self.hsv_to_rgb(hue, saturation, value)
+            colors.append(rgb)
+            
+        # 生成透明度（0.7-1.0）
+        alphas = np.random.uniform(0.7, 1.0, num_particles)
+        
+        return x, y, sizes, colors, alphas
+
+    def generate_wave_particles(self, num_particles=1000):
+        """生成底部波浪粒子（优化版本）"""
+        # 沿x轴均匀分布
+        x = np.linspace(0, self.WIDTH, num_particles)
+        # y坐标初始化在底部附近
+        y = np.full(num_particles, 50)
+        
+        # 生成随机大小（5-15像素）
+        sizes = np.random.uniform(5, 15, num_particles)
+        
+        # 生成蓝色系颜色（使用HSV色彩空间）
+        colors = []
+        for _ in range(num_particles):
+            hue = random.uniform(0.5, 0.67)  # 蓝色系
+            saturation = random.uniform(0.8, 1.0)
+            value = random.uniform(0.8, 1.0)
+            rgb = self.hsv_to_rgb(hue, saturation, value)
+            colors.append(rgb)
+            
+        # 生成透明度（0.6-1.0）
+        alphas = np.random.uniform(0.6, 1.0, num_particles)
+        
+        return x, y, sizes, colors, alphas
+
+    def update(self, frame):
+        """动画更新函数（优化版本）"""
+        # 心形呼吸动画（缩放范围0.95-1.05，周期1.5秒）
+        scale = 0.95 + 0.05 * np.sin(2 * np.pi * frame / (self.FPS * 1.5))
+        center_x, center_y = self.WIDTH // 2, self.HEIGHT // 2 - 50
+        
+        # 更新心形粒子位置（缩放+微小位置扰动）
+        heart_x_updated = (self.heart_x - center_x) * scale + center_x
+        heart_y_updated = (self.heart_y - center_y) * scale + center_y
+        
+        # 添加每帧的位置扰动（增强浮动感）
+        heart_x_updated += np.random.uniform(-1.5, 1.5, len(self.heart_x))
+        heart_y_updated += np.random.uniform(-1.5, 1.5, len(self.heart_y))
+        
+        # 更新心形粒子透明度（随机变化）
+        self.heart_alphas = np.clip(self.heart_alphas + np.random.uniform(-0.08, 0.08, len(self.heart_alphas)), 0.6, 1.0)
+        
+        # 更新心形散点图
+        self.heart_scat.set_offsets(np.column_stack((heart_x_updated, heart_y_updated)))
+        self.heart_scat.set_alpha(self.heart_alphas)
+        
+        # 更新波浪粒子（横向流动 + 上下波动）
+        wave_speed = 4
+        wave_x_updated = (self.wave_x + wave_speed * frame) % self.WIDTH  # 横向流动
+        
+        # 正弦波动效果（形成动态波浪）
+        wave_frequency = 0.018
+        wave_amplitude = 25
+        wave_phase = frame * 0.25
+        wave_y_updated = 50 + wave_amplitude * np.sin(wave_frequency * wave_x_updated + wave_phase)
+        
+        # 添加额外的波动效果
+        wave_y_updated += 10 * np.sin(wave_frequency * wave_x_updated * 2 + wave_phase * 1.5)
+        
+        # 更新波浪粒子透明度（随机变化）
+        self.wave_alphas = np.clip(self.wave_alphas + np.random.uniform(-0.08, 0.08, len(self.wave_alphas)), 0.5, 1.0)
+        
+        # 更新波浪散点图
+        self.wave_scat.set_offsets(np.column_stack((wave_x_updated, wave_y_updated)))
+        self.wave_scat.set_alpha(self.wave_alphas)
+        
+        return self.heart_scat, self.wave_scat
+
+    def run(self):
+        """运行Matplotlib版本动画"""
+        # 创建动画
+        anim = FuncAnimation(self.fig, self.update, frames=self.TOTAL_FRAMES, interval=1000/self.FPS, blit=True)
+        
+        # 显示动画
+        plt.show()
+        
+    def save_gif(self, filename='heart_animation.gif'):
+        """保存为GIF文件"""
+        # 创建动画
+        anim = FuncAnimation(self.fig, self.update, frames=self.TOTAL_FRAMES, interval=1000/self.FPS, blit=True)
+        
+        # 保存为GIF
+        print("正在生成动画，请稍候...")
+        anim.save(filename, writer='pillow', fps=self.FPS)
+        print(f"动画已保存为 {filename}")
+
+# ==================== Tkinter 版本 ====================
+
+class TkinterHeartAnimation:
+    def __init__(self, width=800, height=600):
+        self.width = width
+        self.height = height
+        self.center_x = width // 2
+        self.center_y = height // 2 + 20  # 稍微向下移动
+
+        # 创建主窗口
+        self.root = tk.Tk()
+        self.root.title("李峋爱心代码 - 优化版")
+        self.root.geometry(f"{width}x{height}")
+        self.root.configure(bg='black')
+        self.root.resizable(False, False)
+
+        # 创建Canvas
+        self.canvas = tk.Canvas(self.root, width=width, height=height, bg='black', highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # 粒子列表
+        self.particles = []
+
+        # 初始化粒子
+        self.init_particles()
+
+        # 动画控制变量
+        self.frame = 0
+        self.beat_phase = 0
+        self.beat_intensity = 0.09  # 心跳强度
+        self.beat_speed = 0.13      # 心跳速度
+        self.noise_intensity = 1.6  # 抖动强度
+        
+    def heart_function(self, t, scale=10):
+        """心形参数方程 - 李峋版本"""
+        x = 16 * (math.sin(t) ** 3)
+        y = -(13 * math.cos(t) - 5 * math.cos(2*t) - 2 * math.cos(3*t) - math.cos(4*t))
+        return x * scale, y * scale
+
+    def hsv_to_hex(self, h, s, v):
+        """将HSV颜色值转换为十六进制颜色代码"""
+        r, g, b = colorsys.hsv_to_rgb(h, s, v)
+        return f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
+
+    def init_particles(self):
+        """初始化粒子 - 优化版本，更接近李峋效果"""
+        # 清空现有粒子
+        self.particles = []
+
+        # 增加粒子总数到3500个，获得更好的粉尘质感
+        total_particles = 3500
+
+        # 1. 核心轮廓粒子 (1200个) - 紧贴心形公式
+        for i in range(1200):
+            t = random.uniform(0, 2 * math.pi)
+            x, y = self.heart_function(t, 10)
+            x = x + self.center_x
+            y = y + self.center_y
+
+            # 使用渐变色增加视觉效果
+            hue = random.uniform(0.9, 1.0)  # 红色系
+            saturation = random.uniform(0.8, 1.0)
+            value = random.uniform(0.7, 1.0)
+            color = self.hsv_to_hex(hue, saturation, value)
+
+            particle = {
+                'original_x': x,
+                'original_y': y,
+                'x': x,
+                'y': y,
+                'type': 'core',
+                'size': random.uniform(1.3, 3.0),
+                'color': color,
+                'alpha': random.uniform(0.8, 1.0),  # 透明度变化
+                'velocity_x': 0,
+                'velocity_y': 0
+            }
+            self.particles.append(particle)
+
+        # 2. 内扩散粒子 (1800个) - 填充心形内部
+        for i in range(1800):
+            # 使用更复杂的分布算法
+            t = random.uniform(0, 2 * math.pi)
+            # 使用beta分布控制内部填充密度
+            beta_scale = random.betavariate(1.5, 2.5) * 0.8 + 0.2  # 0.2-1.0范围
+            x, y = self.heart_function(t, beta_scale * 10)
+            x = x + self.center_x
+            y = y + self.center_y
+
+            # 使用渐变色增加视觉效果
+            hue = random.uniform(0.9, 1.0)  # 红色系
+            saturation = random.uniform(0.7, 0.9)
+            value = random.uniform(0.6, 0.9)
+            color = self.hsv_to_hex(hue, saturation, value)
+
+            particle = {
+                'original_x': x,
+                'original_y': y,
+                'x': x,
+                'y': y,
+                'type': 'inner',
+                'size': random.uniform(0.9, 2.3),
+                'color': color,
+                'alpha': random.uniform(0.6, 0.9),
+                'velocity_x': 0,
+                'velocity_y': 0
+            }
+            self.particles.append(particle)
+
+        # 3. 外光晕粒子 (500个) - 制造发光朦胧感
+        for i in range(500):
+            t = random.uniform(0, 2 * math.pi)
+            # 外晕粒子更稀疏，分布更广
+            scale_factor = random.uniform(1.05, 1.8)
+            x, y = self.heart_function(t, scale_factor * 10)
+            x = x + self.center_x
+            y = y + self.center_y
+
+            # 使用渐变色增加视觉效果
+            hue = random.uniform(0.9, 1.0)  # 红色系
+            saturation = random.uniform(0.6, 0.8)
+            value = random.uniform(0.4, 0.8)
+            color = self.hsv_to_hex(hue, saturation, value)
+
+            particle = {
+                'original_x': x,
+                'original_y': y,
+                'x': x,
+                'y': y,
+                'type': 'halo',
+                'size': random.uniform(0.6, 2.0),
+                'color': color,
+                'alpha': random.uniform(0.3, 0.7),
+                'velocity_x': 0,
+                'velocity_y': 0
+            }
+            self.particles.append(particle)
+    
+    def update_particles(self):
+        """更新粒子位置和效果 - 优化版本"""
+        # 心脏跳动效果 - 更接近李峋的"收缩-扩张"节奏
+        self.beat_phase += self.beat_speed
+
+        # 使用复合正弦波模拟真实心跳（快吸慢呼）
+        # 快速收缩，缓慢扩张
+        base_pulse = math.sin(self.beat_phase)
+        fast_pulse = math.sin(self.beat_phase * 3.0) * 0.3
+        self.scale = 1.0 + self.beat_intensity * (base_pulse + fast_pulse)
+
+        # 添加呼吸效果 - 模拟真实心跳的不规则性
+        breath_effect = 0.01 * math.sin(self.beat_phase * 0.3)
+        self.scale += breath_effect
+
+        # 更新每个粒子
+        for particle in self.particles:
+            # 基于心跳缩放调整位置
+            dx = particle['original_x'] - self.center_x
+            dy = particle['original_y'] - self.center_y
+            scaled_x = self.center_x + dx * self.scale
+            scaled_y = self.center_y + dy * self.scale
+
+            # 添加物理运动效果
+            particle['velocity_x'] = (scaled_x - particle['x']) * 0.12 + particle['velocity_x'] * 0.88
+            particle['velocity_y'] = (scaled_y - particle['y']) * 0.12 + particle['velocity_y'] * 0.88
+
+            particle['x'] += particle['velocity_x']
+            particle['y'] += particle['velocity_y']
+
+            # 添加高斯抖动 - 模拟电流滋滋作响的震动感
+            # 不同类型粒子有不同的抖动强度
+            if particle['type'] == 'core':
+                noise_factor = self.noise_intensity * 0.8
+            elif particle['type'] == 'inner':
+                noise_factor = self.noise_intensity * 1.0
+            else:  # halo
+                noise_factor = self.noise_intensity * 1.4
+
+            noise_x = random.gauss(0, noise_factor)
+            noise_y = random.gauss(0, noise_factor)
+            particle['x'] += noise_x
+            particle['y'] += noise_y
+
+            # 添加微小的随机闪烁效果
+            if random.random() < 0.1:  # 10%概率闪烁
+                particle['alpha'] = max(0.2, min(1.0, particle['alpha'] + random.uniform(-0.2, 0.2)))
+
+            # 根据心跳调整粒子大小
+            beat_effect = 0.03 * math.sin(self.beat_phase * 2.0)
+            particle['size'] = max(0.1, particle['size'] + beat_effect)
+
+        self.frame += 1
+    
+    def draw_particles(self):
+        """绘制所有粒子 - 优化版本"""
+        # 清空画布
+        self.canvas.delete("all")
+
+        # 绘制每个粒子（按类型排序以获得正确的层次感）
+        # 先绘制外晕粒子，再绘制内部粒子，最后绘制核心粒子
+        draw_order = ['halo', 'inner', 'core']
+
+        for particle_type in draw_order:
+            for particle in self.particles:
+                if particle['type'] == particle_type:
+                    x, y = particle['x'], particle['y']
+                    size = particle['size']
+
+                    # 确保粒子在画布范围内
+                    if -size <= x <= self.width + size and -size <= y <= self.height + size:
+                        # 绘制粒子（Tkinter不支持真正的alpha透明度，所以直接使用原始颜色）
+                        self.canvas.create_oval(
+                            x - size, y - size, x + size, y + size,
+                            fill=particle['color'], outline='', tags="particle"
+                        )
+    
+    def animate(self):
+        """动画循环 - 优化帧率"""
+        self.update_particles()
+        self.draw_particles()
+        self.root.after(18, self.animate)  # 约55FPS，更流畅
+    
+    def run(self):
+        """运行动画"""
+        self.animate()
+        self.root.mainloop()
+
+
+# ==================== 主程序 ====================
+
+def main():
+    print("请选择要运行的版本:")
+    print("1. Matplotlib版本 (静态背景 + 动画心形)")
+    print("2. Tkinter版本 (全动画粒子效果)")
+    
+    choice = input("请输入选择 (1 或 2): ")
+    
+    if choice == "1":
+        print("运行Matplotlib版本...")
+        animation = MatplotlibHeartAnimation()
+        animation.run()
+    elif choice == "2":
+        print("运行Tkinter版本...")
+        animation = TkinterHeartAnimation()
+        animation.run()
+    else:
+        print("无效选择，默认运行Tkinter版本...")
+        animation = TkinterHeartAnimation()
+        animation.run()
+
+if __name__ == "__main__":
+    main()
