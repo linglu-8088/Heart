@@ -15,128 +15,76 @@ import numpy as np
 
 WINDOW_TITLE = "3D Particle Heart v2"
 BACKGROUND = (0.015, 0.0, 0.025, 1.0)
-HEART_SCALE = 1.0 / 18.0  # retained for orbit curve reference only
 
 # Default particle counts per layer (scaled by --particles factor)
-_BASE_OUTLINE = 15000
-_BASE_SHELL = 25000
-_BASE_FILL = 100000
-_BASE_CORE = 20000
-_BASE_ORBIT = 40000
+_BASE_OUTLINE = 40000
+_BASE_SHELL = 50000
+_BASE_FILL = 120000
+_BASE_CORE = 35000
+_BASE_ORBIT = 30000
 _BASE_TOTAL = _BASE_OUTLINE + _BASE_SHELL + _BASE_FILL + _BASE_CORE + _BASE_ORBIT
+_BASE_STARS = 2000
+_BASE_SPARKS = 5000
+_BASE_RINGS = 2048
+
+# 3D depth scale: max half-thickness at the heart centre, tapers to zero at surface
+_HEART_DEPTH = 0.32
+
+# Color themes: each entry is a list of 5 vec3 tints (outline/shell/fill/core/orbit)
+THEME_NAMES = ["Passion", "Aurora", "Sunset", "Ice", "Neon", "Gold"]
+THEMES = [
+    # 0: Passion (warm red-pink)
+    [(1.00, 0.55, 0.60), (1.00, 0.50, 0.55), (1.00, 0.45, 0.50),
+     (1.10, 0.50, 0.55), (1.00, 0.60, 0.50)],
+    # 1: Aurora (cool blue-teal-purple)
+    [(0.80, 0.85, 1.15), (0.75, 0.90, 1.20), (0.70, 0.95, 1.25),
+     (0.65, 0.90, 1.30), (0.70, 0.85, 1.15)],
+    # 2: Sunset (warm orange-gold-red)
+    [(1.15, 0.90, 0.75), (1.20, 0.85, 0.70), (1.25, 0.80, 0.60),
+     (1.30, 0.75, 0.55), (1.10, 0.95, 0.70)],
+    # 3: Ice (cool cyan-blue-white)
+    [(0.80, 1.00, 1.25), (0.75, 1.05, 1.30), (0.70, 1.10, 1.35),
+     (0.65, 1.15, 1.40), (0.75, 1.00, 1.20)],
+    # 4: Neon (vibrant neon pink-blue-purple)
+    [(1.20, 0.60, 1.30), (0.60, 0.60, 1.35), (1.30, 0.50, 0.90),
+     (0.70, 0.40, 1.40), (1.15, 0.55, 1.10)],
+    # 5: Gold (champagne gold)
+    [(1.20, 1.10, 0.70), (1.15, 1.05, 0.65), (1.25, 1.00, 0.55),
+     (1.30, 0.90, 0.50), (1.10, 1.05, 0.65)],
+]
 
 
 # ═══════════════════════════════════════════════════════════════
-# Section 1: 3D Noise System
+# Section 1: 2D Parametric Heart Boundary
 # ═══════════════════════════════════════════════════════════════
 
-class BlinnNoise3D:
-    """3D value noise with Perlin improved permutation table + FBM."""
-
-    def __init__(self, seed: int = 0) -> None:
-        rng = np.random.default_rng(seed)
-        self._perm = np.arange(256, dtype=np.int32)
-        rng.shuffle(self._perm)
-        self._perm = np.tile(self._perm, 2)
-
-    def _hash_vec(self, xi: np.ndarray, yi: np.ndarray, zi: np.ndarray) -> np.ndarray:
-        h = self._perm[self._perm[self._perm[xi & 255] + (yi & 255)] + (zi & 255)]
-        return h.astype(np.float64) / 127.5 - 1.0
-
-    @staticmethod
-    def _fade(t: np.ndarray) -> np.ndarray:
-        return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
-
-    def noise(self, x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
-        xi = np.floor(x).astype(np.int32)
-        yi = np.floor(y).astype(np.int32)
-        zi = np.floor(z).astype(np.int32)
-        fx = self._fade(x - xi)
-        fy = self._fade(y - yi)
-        fz = self._fade(z - zi)
-
-        c000 = self._hash_vec(xi, yi, zi)
-        c100 = self._hash_vec(xi + 1, yi, zi)
-        c010 = self._hash_vec(xi, yi + 1, zi)
-        c110 = self._hash_vec(xi + 1, yi + 1, zi)
-        c001 = self._hash_vec(xi, yi, zi + 1)
-        c101 = self._hash_vec(xi + 1, yi, zi + 1)
-        c011 = self._hash_vec(xi, yi + 1, zi + 1)
-        c111 = self._hash_vec(xi + 1, yi + 1, zi + 1)
-
-        x00 = c000 + fx * (c100 - c000)
-        x10 = c010 + fx * (c110 - c010)
-        x01 = c001 + fx * (c101 - c001)
-        x11 = c011 + fx * (c111 - c011)
-        y0 = x00 + fy * (x10 - x00)
-        y1 = x01 + fy * (x11 - x01)
-        return y0 + fz * (y1 - y0)
-
-    def fbm(self, x: np.ndarray, y: np.ndarray, z: np.ndarray,
-            octaves: int = 4, lacunarity: float = 2.0, gain: float = 0.5) -> np.ndarray:
-        value = np.zeros_like(x, dtype=np.float64)
-        amplitude = 1.0
-        frequency = 1.0
-        max_value = 0.0
-        for _ in range(octaves):
-            value += amplitude * self.noise(x * frequency, y * frequency, z * frequency)
-            max_value += amplitude
-            amplitude *= gain
-            frequency *= lacunarity
-        return value / max_value
+_HEART_SCALE = 1.0 / 13.0
 
 
-# ═══════════════════════════════════════════════════════════════
-# Section 2: Heart Implicit Surface (Taubin, remapped y-up)
-# ═══════════════════════════════════════════════════════════════
+def heart_boundary(theta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Classic 2D parametric heart curve.
 
-# The Taubin surface in its natural frame (cleft at +z, point at -z):
-#   F(X,Y,Z) = (X² + 9Y²/4 + Z² − 1)³ − X²Z³ − 9Y²Z³/80
-#
-# We rotate -90° around X so that Y becomes the up axis:
-#   Taubin (X, Y, Z)  ←  Renderer (x, z, -y)
-#
-# Substituting: X=x, Y=z, Z=-y gives us F in renderer coords.
-
-
-def _heart_f(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """Implicit function value. f<0 = interior, f=0 = surface, f>0 = exterior.
-
-    Taubin surface: F(X,Y,Z) = (X² + 9Y²/4 + Z² − 1)³ − X²Z³ − 9Y²Z³/80
-    Mapped to renderer via (X,Y,Z) = (x, -z, y) so that y is up (cleft at +y).
+    Returns (x, y) in approx [-1.23, 1.23] x [-1.31, 0.89].
+    Cleft at centre-top, point at bottom.
     """
-    x2 = x * x
-    y2 = y * y
-    z2 = z * z
-    A = x2 + 2.25 * z2 + y2 - 1.0
-    return A * A * A - x2 * y2 * y - (9.0 / 80.0) * z2 * y2 * y
+    x = 16.0 * np.sin(theta) ** 3
+    y = (13.0 * np.cos(theta)
+         - 5.0 * np.cos(2.0 * theta)
+         - 2.0 * np.cos(3.0 * theta)
+         - np.cos(4.0 * theta))
+    return x * _HEART_SCALE, y * _HEART_SCALE
 
 
-def _heart_gradient(x: np.ndarray, y: np.ndarray, z: np.ndarray):
-    """Analytic gradient of f in renderer coordinates (x-right, y-up, z-depth)."""
-    x2 = x * x
-    y2 = y * y
-    z2 = z * z
-    y3 = y2 * y
-    A = x2 + 2.25 * z2 + y2 - 1.0
-    A2 = A * A
-
-    gx = 6.0 * x * A2 - 2.0 * x * y3
-    gy = 6.0 * y * A2 - 3.0 * x2 * y2 - (27.0 / 80.0) * z2 * y2
-    gz = 13.5 * z * A2 - (9.0 / 40.0) * z * y3
-
-    return gx, gy, gz
-
-
-def heart_distance(x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """Signed distance approximation: f / |grad f|. Negative = interior."""
-    f_val = _heart_f(x, y, z)
-    gx, gy, gz = _heart_gradient(x, y, z)
-    grad_norm = np.sqrt(gx * gx + gy * gy + gz * gz)
-    grad_norm = np.maximum(grad_norm, 1e-8)
-    raw = f_val / grad_norm
-    raw = np.clip(raw, -2.0, 2.0)
-    return raw
+def _heart_outward_normal(theta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Approximate 2D outward normal of the heart boundary at each theta."""
+    eps = 1e-5
+    x0, y0 = heart_boundary(theta - eps)
+    x1, y1 = heart_boundary(theta + eps)
+    tx = x1 - x0
+    ty = y1 - y0
+    n_len = np.sqrt(tx * tx + ty * ty)
+    n_len = np.maximum(n_len, 1e-8)
+    return ty / n_len, -tx / n_len
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -162,163 +110,129 @@ def _stack_particles(positions, colors, sizes, phase, kind, distance, alpha, spe
     ])
 
 
-def _rejection_sample_volume(rng, noise, count, max_dist, threshold, max_trials_factor=8):
-    """Rejection-sample points inside the 3D heart volume with noise-modulated density."""
-    bounds = np.array([
-        [-1.30, 1.30],  # x
-        [-1.30, 1.30],  # y (up, cleft at +y, point at -y)
-        [-0.50, 0.50],  # z (depth, thin)
-    ])
-    chunks = []
-    total_trials = 0
-    max_trials = count * max_trials_factor
-    collected = 0
+def _sample_outline_new(rng, count):
+    theta = np.linspace(0.0, math.tau, count, endpoint=False)
+    theta += rng.normal(0.0, 0.015, count)
+    base_x, base_y = heart_boundary(theta)
+    shell = 0.96 + 0.08 * rng.random(count) + rng.normal(0.0, 0.012, count)
+    jitter = rng.normal(0.0, 0.016, (count, 2))
+    x = base_x * shell + jitter[:, 0]
+    y = base_y * shell + jitter[:, 1]
+    z = rng.normal(0.0, 0.05, count)
 
-    while collected < count and total_trials < max_trials:
-        batch_count = min(count * 3, 60000)
-        total_trials += batch_count
-        cx = rng.uniform(bounds[0, 0], bounds[0, 1], batch_count)
-        cy = rng.uniform(bounds[1, 0], bounds[1, 1], batch_count)
-        cz = rng.uniform(bounds[2, 0], bounds[2, 1], batch_count)
-
-        dist = heart_distance(cx, cy, cz)
-        noise_val = noise.fbm(cx * 3.5, cy * 3.5, cz * 3.5, octaves=4)
-        density = 0.5 + 0.5 * noise_val
-
-        mask = (dist < max_dist) & (density > threshold)
-        if np.any(mask):
-            chunks.append(np.column_stack([
-                cx[mask], cy[mask], cz[mask], dist[mask], density[mask]
-            ]))
-            collected += mask.sum()
-
-    if not chunks:
-        raise RuntimeError(f"Failed to sample any particles (max_dist={max_dist}, threshold={threshold})")
-    result = np.vstack(chunks)[:count]
-    return result[:, :3], result[:, 3], result[:, 4]
-
-
-def _sample_outline_new(rng, noise, count):
-    positions, distances, _density = _rejection_sample_volume(
-        rng, noise, count, max_dist=0.0, threshold=-0.6, max_trials_factor=30
-    )
-    # Newton-projection to surface
-    for _ in range(3):
-        gx, gy, gz = _heart_gradient(positions[:, 0], positions[:, 1], positions[:, 2])
-        f_val = _heart_f(positions[:, 0], positions[:, 1], positions[:, 2])
-        gnorm2 = gx * gx + gy * gy + gz * gz
-        gnorm2 = np.maximum(gnorm2, 1e-8)
-        step = f_val / gnorm2
-        positions[:, 0] -= gx * step
-        positions[:, 1] -= gy * step
-        positions[:, 2] -= gz * step
-
-    positions[:, 2] += rng.normal(0.0, 0.008, count)
-    distances = heart_distance(positions[:, 0], positions[:, 1], positions[:, 2])
-    # radial: 0=deep interior, 1=edge. Outline particles are on the surface → near 1.
-    radial = np.clip(0.82 + rng.random(count) * 0.22, 0.78, 1.04)
-
-    mix = rng.random(count)
+    positions = np.column_stack([x, y, z])
+    n = count
+    radial = np.clip(0.82 + rng.random(n) * 0.22, 0.78, 1.04)
+    mix = rng.random(n)
     colors = _lerp_colors(
         np.array([0.94, 0.14, 0.28], dtype="f4"),
         np.array([0.98, 0.30, 0.46], dtype="f4"),
         mix,
     )
-    sizes = rng.uniform(2.9, 5.0, count)
-    phase = rng.uniform(0.0, math.tau, count)
-    alpha = rng.uniform(0.18, 0.34, count)
-    speed = rng.uniform(0.8, 1.3, count)
+    sizes = rng.uniform(4.0, 6.5, n)
+    phase = rng.uniform(0.0, math.tau, n)
+    alpha = rng.uniform(0.50, 0.80, n)
+    speed = rng.uniform(0.8, 1.3, n)
     return _stack_particles(positions, colors, sizes, phase, 0.0, radial, alpha, speed)
 
 
-def _sample_shell_new(rng, noise, count):
-    positions, distances, _density = _rejection_sample_volume(
-        rng, noise, count, max_dist=0.08, threshold=-0.35, max_trials_factor=20
-    )
-    # Shell particles are near surface: 0.01 < |d| < 0.08, mapping to ~0.60-0.90
-    radial = np.clip(0.58 + abs(distances) / 0.09, 0.55, 0.92)
-    mix = np.clip(0.35 + 0.55 * rng.random(count), 0.0, 1.0)
+def _sample_shell_new(rng, count):
+    theta = rng.uniform(0.0, math.tau, count)
+    base_x, base_y = heart_boundary(theta)
+    boundary_factor = 0.28 + 0.68 * (rng.random(count) ** 1.2)
+    xy_noise = rng.normal(0.0, 0.025, (count, 2))
+    x = base_x * boundary_factor + xy_noise[:, 0]
+    y = base_y * boundary_factor + xy_noise[:, 1]
+
+    z_max = _HEART_DEPTH * np.power(np.maximum(0.0, 1.0 - boundary_factor), 0.45)
+    z = rng.normal(0.0, z_max * 0.42, count)
+
+    positions = np.column_stack([x, y, z])
+    n = count
+    radial = np.clip(boundary_factor * 0.85 + 0.12, 0.18, 0.98)
+    mix = np.clip(0.35 + 0.55 * rng.random(n), 0.0, 1.0)
     colors = _lerp_colors(
         np.array([0.96, 0.20, 0.32], dtype="f4"),
         np.array([0.98, 0.42, 0.52], dtype="f4"),
         mix,
     )
-    sizes = rng.uniform(2.5, 4.8, count)
-    phase = rng.uniform(0.0, math.tau, count)
-    alpha = rng.uniform(0.08, 0.16, count)
-    speed = rng.uniform(0.9, 1.6, count)
+    sizes = rng.uniform(4.5, 7.5, n)
+    phase = rng.uniform(0.0, math.tau, n)
+    alpha = rng.uniform(0.35, 0.65, n)
+    speed = rng.uniform(0.9, 1.6, n)
     return _stack_particles(positions, colors, sizes, phase, 1.0, radial, alpha, speed)
 
 
-def _temperature_color(distance, mix_rng=None):
-    """Temperature gradient: core hot (white-pink) → edge cool (dark red) → orbit (golden)."""
-    temp = 1.0 / (1.0 + np.exp((distance + 0.1) * 8.0))
-    if mix_rng is not None:
-        temp = np.clip(temp + mix_rng * 0.06, 0.0, 1.0)
+def _sample_fill_new(rng, count):
+    theta = rng.uniform(0.0, math.tau, count)
+    base_x, base_y = heart_boundary(theta)
+    # power 2.5: median bf=0.29 — particles concentrated in deep interior for dense body
+    boundary_factor = 0.02 + 0.86 * (rng.random(count) ** 2.5)
+    xy_noise_scale = 0.025 + 0.030 * (1.0 - boundary_factor)
+    x = base_x * boundary_factor + rng.normal(0.0, xy_noise_scale, count)
+    y = base_y * boundary_factor + rng.normal(0.0, xy_noise_scale, count)
 
-    stops_t = np.array([0.0, 0.25, 0.55, 0.80, 1.0], dtype="f4")
-    stops_c = np.array([
-        [1.00, 0.55, 0.05],   # golden-orange
-        [0.55, 0.05, 0.10],   # dark red
-        [0.95, 0.15, 0.25],   # deep red
-        [1.00, 0.38, 0.48],   # pink
-        [1.00, 0.88, 0.88],   # white-pink
-    ], dtype="f4")
+    z_max = _HEART_DEPTH * np.power(np.maximum(0.0, 1.0 - boundary_factor), 0.45)
+    z = rng.normal(0.0, z_max * 0.44, count)
 
-    idx = np.searchsorted(stops_t, temp, side="right") - 1
-    idx = np.clip(idx, 0, len(stops_t) - 2)
-    t_local = (temp - stops_t[idx]) / (stops_t[idx + 1] - stops_t[idx] + 1e-8)
-    t_local = np.clip(t_local, 0.0, 1.0)
-    return stops_c[idx] + (stops_c[idx + 1] - stops_c[idx]) * t_local[:, None]
-
-
-def _sample_fill_new(rng, noise, count):
-    positions, distances, density = _rejection_sample_volume(
-        rng, noise, count, max_dist=-0.02, threshold=-0.30, max_trials_factor=6
+    positions = np.column_stack([x, y, z])
+    n = count
+    radial = np.clip(boundary_factor, 0.0, 1.0)
+    warm_mix = np.clip(boundary_factor * 0.85 + rng.normal(0.0, 0.08, n), 0.0, 1.0)
+    colors = _lerp_colors(
+        np.array([0.98, 0.46, 0.38], dtype="f4"),
+        np.array([0.94, 0.12, 0.28], dtype="f4"),
+        warm_mix,
     )
-    # radial: 0=deep interior, 1=edge. Fill ranges from -0.28 (deep) to -0.02 (near surface).
-    radial = np.clip(1.0 + distances / 0.28, 0.0, 1.0)
-    colors = _temperature_color(distances, rng.normal(0.0, 0.03, count))
-    sizes = rng.uniform(1.8, 4.0, count)
-    phase = rng.uniform(0.0, math.tau, count)
-    alpha = rng.uniform(0.06, 0.15, count)
-    speed = rng.uniform(0.7, 1.5, count)
+    colors = _lerp_colors(colors, np.array([0.98, 0.54, 0.48], dtype="f4"),
+                          (1.0 - boundary_factor) * 0.12)
+    sizes = rng.uniform(4.0, 7.0, n)
+    phase = rng.uniform(0.0, math.tau, n)
+    alpha = rng.uniform(0.18, 0.38, n)
+    speed = rng.uniform(0.7, 1.5, n)
     return _stack_particles(positions, colors, sizes, phase, 2.0, radial, alpha, speed)
 
 
-def _sample_core_new(rng, noise, count):
-    positions, distances, density = _rejection_sample_volume(
-        rng, noise, count, max_dist=-0.20, threshold=-0.45, max_trials_factor=10
+def _sample_core_new(rng, count):
+    # Uniform sampling in a 3D ellipsoid (slightly squashed in z)
+    phi = rng.uniform(0.0, math.pi, count)
+    theta = rng.uniform(0.0, math.tau, count)
+    r = rng.random(count) ** (1.0 / 3.0) * 0.35
+    x = r * np.sin(phi) * np.cos(theta) * 0.95 + rng.normal(0.0, 0.025, count)
+    y = r * np.sin(phi) * np.sin(theta) * 1.08 + rng.normal(0.0, 0.025, count)
+    z = r * np.cos(phi) * 0.75 + rng.normal(0.0, 0.03, count)
+
+    positions = np.column_stack([x, y, z])
+    n = count
+    radial = np.clip(r / 0.35, 0.0, 0.32)
+    mix = rng.random(n)
+    colors = _lerp_colors(
+        np.array([0.98, 0.40, 0.52], dtype="f4"),
+        np.array([0.99, 0.56, 0.64], dtype="f4"),
+        mix,
     )
-    # radial: 0=deep interior, 1=edge. Core ranges from -0.38 (deepest) to -0.20 (boundary).
-    radial = np.clip(1.0 + distances / 0.38, 0.0, 1.0)
-    colors = _temperature_color(distances, rng.normal(0.0, 0.04, count))
-    sizes = rng.uniform(4.0, 7.5, count)
-    phase = rng.uniform(0.0, math.tau, count)
-    alpha = rng.uniform(0.05, 0.10, count)
-    speed = rng.uniform(1.0, 2.2, count)
+    sizes = rng.uniform(6.0, 10.0, n)
+    phase = rng.uniform(0.0, math.tau, n)
+    alpha = rng.uniform(0.35, 0.60, n)
+    speed = rng.uniform(1.0, 2.2, n)
     return _stack_particles(positions, colors, sizes, phase, 3.0, radial, alpha, speed)
 
 
 def _sample_orbit_new(rng, count):
     angle = rng.uniform(0.0, math.tau, count)
-    # Mix of figure-8 seeds, circular seeds, and scattered seeds
     path_choice = rng.random(count)
 
-    # Lemniscate figure-8 seed positions
     s_val = angle
     denom = 1.0 + np.sin(s_val) ** 2
-    lem_x = 0.8 * np.cos(s_val) / denom
+    lem_x = 0.85 * np.cos(s_val) / denom
     lem_y = 0.55 * np.sin(s_val) * np.cos(s_val) / denom
-    lem_z = 0.4 * np.sin(s_val) / denom
+    lem_z = 0.45 * np.sin(s_val) / denom
 
-    # Circular orbit seeds at various radii
-    r_circ = rng.uniform(1.05, 1.8, count)
+    r_circ = rng.uniform(1.15, 2.0, count)
     circ_x = r_circ * np.cos(angle)
     circ_y = rng.normal(0.0, 0.35, count)
     circ_z = r_circ * 0.6 * np.sin(angle)
 
-    # Blend
     mask_lem = path_choice < 0.35
     mask_circ = (path_choice >= 0.35) & (path_choice < 0.75)
     mask_scatter = path_choice >= 0.75
@@ -334,7 +248,7 @@ def _sample_orbit_new(rng, count):
     z[mask_circ] = circ_z[mask_circ]
     if mask_scatter.any():
         sc = mask_scatter.sum()
-        sc_r = rng.uniform(1.1, 2.0, sc)
+        sc_r = rng.uniform(1.2, 2.2, sc)
         sc_a = rng.uniform(0.0, math.tau, sc)
         sc_b = rng.uniform(0.0, math.tau, sc)
         x[mask_scatter] = sc_r * np.cos(sc_a) * np.cos(sc_b)
@@ -342,22 +256,83 @@ def _sample_orbit_new(rng, count):
         z[mask_scatter] = sc_r * np.sin(sc_a) * np.cos(sc_b) * 0.5
 
     positions = np.column_stack([x, y, z])
-    distances = np.ones(count, dtype="f4") * 0.50
-    radial = np.full(count, 0.15, dtype="f4")
-    mix = np.clip(rng.normal(0.5, 0.22, count), 0.0, 1.0)
+    n = count
+    distance = np.ones(n, dtype="f4") * 0.50
+    radial = np.full(n, 0.15, dtype="f4")
+    mix = np.clip(rng.normal(0.5, 0.22, n), 0.0, 1.0)
     colors = _lerp_colors(
         np.array([1.0, 0.25, 0.22], dtype="f4"),
         np.array([1.0, 0.65, 0.35], dtype="f4"),
         mix,
     )
-    sizes = rng.uniform(1.5, 4.0, count)
-    phase = rng.uniform(0.0, math.tau, count)
-    alpha = rng.uniform(0.04, 0.09, count)
-    speed = rng.uniform(0.8, 1.9, count)
+    sizes = rng.uniform(1.5, 4.0, n)
+    phase = rng.uniform(0.0, math.tau, n)
+    alpha = rng.uniform(0.10, 0.20, n)
+    speed = rng.uniform(0.8, 1.9, n)
     return _stack_particles(positions, colors, sizes, phase, 4.0, radial, alpha, speed)
 
 
-def build_particle_cloud(seed, noise, total_count):
+def _sample_stars(rng, count):
+    phi = rng.uniform(0.0, math.pi, count)
+    theta = rng.uniform(0.0, math.tau, count)
+    radius = rng.uniform(10.0, 20.0, count)
+    x = radius * np.sin(phi) * np.cos(theta)
+    y = radius * np.sin(phi) * np.sin(theta)
+    z = radius * np.cos(phi)
+    cw = np.full((count, 3), 0.95, dtype="f4")
+    cw[:, 2] = rng.uniform(0.90, 1.00, count)
+    phase = rng.uniform(0.0, math.tau, count)
+    speed = rng.uniform(0.05, 0.20, count)
+    return _stack_particles(np.column_stack([x, y, z]), cw,
+                            rng.uniform(1.5, 3.5, count),
+                            phase, 5.0, np.zeros(count),
+                            np.full(count, 0.7, dtype="f4"),
+                            speed)
+
+
+def _sample_sparks(rng, count):
+    theta = rng.uniform(0.0, math.tau, count)
+    base_x, base_y = heart_boundary(theta)
+    nx, ny = _heart_outward_normal(theta)
+    shell = 0.96 + 0.06 * rng.random(count)
+    jitter = rng.normal(0.0, 0.014, (count, 2))
+    x = base_x * shell + jitter[:, 0]
+    y = base_y * shell + jitter[:, 1]
+    z = rng.normal(0.0, 0.08, count)
+
+    n = count
+    dx = nx + rng.normal(0.0, 0.40, n)
+    dy = ny + rng.normal(0.0, 0.40, n)
+    dz = rng.normal(0.0, 0.40, n)
+    dn = np.maximum(np.sqrt(dx * dx + dy * dy + dz * dz), 1e-8)
+    dx /= dn; dy /= dn; dz /= dn
+
+    sd = np.zeros(n, dtype=[("pos", "f4", 3), ("dir", "f4", 3), ("speed", "f4"),
+                             ("p_off", "f4"), ("sz", "f4"), ("al", "f4")])
+    sd["pos"] = np.column_stack([x, y, z]).astype("f4")
+    sd["dir"] = np.column_stack([dx, dy, dz]).astype("f4")
+    sd["speed"] = rng.uniform(0.3, 1.0, n).astype("f4")
+    sd["p_off"] = rng.uniform(0.0, 0.15, n).astype("f4")
+    sd["sz"] = rng.uniform(1.5, 4.0, n).astype("f4")
+    sd["al"] = rng.uniform(0.5, 0.9, n).astype("f4")
+    return sd
+
+
+def _sample_rings(rng, count):
+    n_rings = 6; per = count // n_rings
+    rows = []
+    for i in range(n_rings):
+        br = 0.7 + i * 0.35
+        nthis = per if i < n_rings - 1 else count - len(rows)
+        ang = rng.uniform(0.0, math.tau, nthis)
+        yo = rng.uniform(-0.15, 0.15, nthis)
+        sp = rng.uniform(0.6, 1.0, nthis)
+        for j in range(nthis):
+            rows.append((math.cos(ang[j]) * br, yo[j], math.sin(ang[j]) * br, br, sp[j], 0.05))
+    return np.array(rows, dtype="f4")
+
+
+def build_particle_cloud(seed, total_count):
     rng = np.random.default_rng(seed)
     factor = total_count / _BASE_TOTAL
     counts = {
@@ -377,10 +352,10 @@ def build_particle_cloud(seed, noise, total_count):
 
     t0 = time.perf_counter()
     layers = [
-        _sample_outline_new(rng, noise, counts["outline"]),
-        _sample_shell_new(rng, noise, counts["shell"]),
-        _sample_fill_new(rng, noise, counts["fill"]),
-        _sample_core_new(rng, noise, counts["core"]),
+        _sample_outline_new(rng, counts["outline"]),
+        _sample_shell_new(rng, counts["shell"]),
+        _sample_fill_new(rng, counts["fill"]),
+        _sample_core_new(rng, counts["core"]),
         _sample_orbit_new(rng, counts["orbit"]),
     ]
     particles = np.vstack(layers).astype("f4")
@@ -415,6 +390,7 @@ uniform float u_time;
 uniform float u_beat;
 uniform float u_point_scale;
 uniform float u_shockwave;
+uniform vec3 u_theme_tint[5];
 
 in vec3 in_position;
 in vec3 in_color;
@@ -453,36 +429,36 @@ void main() {
 
     if (in_kind < 0.5) {
         // Outline: subtle wobble
-        pos.xy *= 1.0 + pulse * 0.055;
-        pos.z += 0.015 * sin(u_time * 1.8 + in_phase) * (1.0 - edge_lock);
-        pos.z += 0.024 * sin(u_time * 0.75 + in_phase * 0.7);
+        pos.xy *= 1.0 + pulse * 0.025;
+        pos.z += 0.006 * sin(u_time * 1.8 + in_phase) * (1.0 - edge_lock);
+        pos.z += 0.010 * sin(u_time * 0.75 + in_phase * 0.7);
     } else if (in_kind < 1.5) {
         // Shell: gentle breathing
-        float yaw = 0.34 * sin(u_time * 0.72);
-        float pitch = 0.12 * cos(u_time * 0.40);
+        float yaw = 0.15 * sin(u_time * 0.72);
+        float pitch = 0.06 * cos(u_time * 0.40);
         vec3 rot = rot_x(rot_y(pos, yaw), pitch);
-        pos = mix(pos, rot, (1.0 - edge_lock) * 0.42);
-        pos.z += 0.042 * sin(u_time * (1.05 + in_speed * 0.18) + in_phase) * (0.65 - 0.4 * edge_lock);
-        pos.xy *= 1.0 + pulse * 0.045;
+        pos = mix(pos, rot, (1.0 - edge_lock) * 0.20);
+        pos.z += 0.018 * sin(u_time * (1.05 + in_speed * 0.18) + in_phase) * (0.65 - 0.4 * edge_lock);
+        pos.xy *= 1.0 + pulse * 0.020;
     } else if (in_kind < 2.5) {
         // Fill: expansion + swirl + shockwave
-        float yaw = 0.82 * sin(u_time * 0.78);
-        float pitch = 0.18 * cos(u_time * 0.45);
+        float yaw = 0.28 * sin(u_time * 0.78);
+        float pitch = 0.07 * cos(u_time * 0.45);
         vec3 rot = rot_x(rot_y(pos, yaw), pitch);
-        pos = mix(pos, rot, (1.0 - edge_lock) * 0.86);
+        pos = mix(pos, rot, (1.0 - edge_lock) * 0.35);
         float swirl = sin(u_time * (1.45 + in_speed * 0.28) + in_phase);
-        pos.x += swirl * 0.05 * core_mix;
-        pos.z += cos(u_time * 1.18 + in_phase) * 0.12 * core_mix;
-        pos.y += sin(u_time * 1.08 + in_phase * 1.2) * 0.03 * core_mix;
+        pos.x += swirl * 0.02 * core_mix;
+        pos.z += cos(u_time * 1.18 + in_phase) * 0.04 * core_mix;
+        pos.y += sin(u_time * 1.08 + in_phase * 1.2) * 0.012 * core_mix;
         // Shockwave ripple: radial push
-        pos *= 1.0 + shock * 0.025 * (1.0 - abs(in_radial - 0.5) * 2.0);
-        pos.xy *= 1.0 + pulse * (0.05 + 0.025 * core_mix);
-        pos.z *= 1.0 + pulse * 0.20;
+        pos *= 1.0 + shock * 0.010 * (1.0 - abs(in_radial - 0.5) * 2.0);
+        pos.xy *= 1.0 + pulse * (0.020 + 0.010 * core_mix);
+        pos.z *= 1.0 + pulse * 0.07;
     } else if (in_kind < 3.5) {
         // Core: strong pulse + burst
-        pos.xy *= 1.0 + pulse * (0.06 + 0.04 * core_mix);
-        pos.z *= 1.0 + pulse * 0.22;
-        pos *= 1.0 + shock * 0.04 * core_mix;
+        pos.xy *= 1.0 + pulse * (0.025 + 0.015 * core_mix);
+        pos.z *= 1.0 + pulse * 0.08;
+        pos *= 1.0 + shock * 0.015 * core_mix;
     } else {
         // Orbit: figure-8 / circular paths
         float orbit = u_time * (0.95 + in_speed * 0.45) + in_phase;
@@ -491,17 +467,17 @@ void main() {
         // Blend figure-8 with orbital motion based on phase
         float blend = 0.5 + 0.5 * sin(in_phase * 2.7);
         vec3 fig8 = vec3(
-            in_position.x + 0.35 * c / denom,
-            in_position.y + 0.35 * s * c / denom * 0.7,
-            in_position.z + 0.25 * s / denom
+            in_position.x + 0.18 * c / denom,
+            in_position.y + 0.18 * s * c / denom * 0.7,
+            in_position.z + 0.12 * s / denom
         );
         vec3 circ = vec3(
-            in_position.x + 0.12 * cos(orbit),
-            in_position.y + 0.08 * sin(orbit * 1.2),
-            in_position.z + 0.18 * sin(orbit)
+            in_position.x + 0.06 * cos(orbit),
+            in_position.y + 0.04 * sin(orbit * 1.2),
+            in_position.z + 0.08 * sin(orbit)
         );
         pos = mix(circ, fig8, blend);
-        pos *= 1.0 + pulse * 0.09;
+        pos *= 1.0 + pulse * 0.04;
     }
 
     // Camera-space transform
@@ -521,7 +497,7 @@ void main() {
     float shim_light = mix(0.95, 1.04, shimmer);
     vec3 depth_tint = mix(vec3(0.72, 0.78, 0.96), vec3(1.10, 0.98, 0.92), frontness);
     if (in_kind > 3.5) sil_light *= 1.03;
-    v_color = in_color * depth_tint * depth_light * sil_light * shim_light;
+    v_color = in_color * depth_tint * depth_light * sil_light * shim_light * u_theme_tint[int(in_kind)];
 
     // HDR brightness for bloom extraction
     v_brightness = 1.0
@@ -529,9 +505,9 @@ void main() {
         + shock * (1.0 - abs(in_radial - shock) * 3.0) * 1.8
         + core_mix * 0.6;
 
-    // Depth fog
-    float fog = exp(-depth * 0.25);
-    v_alpha = in_alpha * fog * mix(0.72, 1.18, frontness) * mix(0.9, 1.15, shimmer);
+    // Depth fog (mild, to keep particles visible)
+    float fog = exp(-depth * 0.08);
+    v_alpha = in_alpha * fog * mix(0.85, 1.15, frontness) * mix(0.95, 1.10, shimmer);
     v_kind = in_kind;
     v_core_mix = core_mix;
     v_seed = in_phase;
@@ -683,6 +659,165 @@ void main() {
     fragColor = texture(u_input_tex, v_uv) * u_decay;
 }
 """
+STAR_VS = """#version 330
+uniform mat4 u_proj;
+uniform mat4 u_view;
+uniform float u_time;
+
+in vec3 in_position;
+in vec3 in_color;
+in float in_size;
+in float in_phase;
+in float in_kind;
+in float in_radial;
+in float in_alpha;
+in float in_speed;
+
+out vec3 v_color;
+out float v_alpha;
+
+void main() {
+    vec4 view_pos = u_view * vec4(in_position, 1.0);
+    gl_Position = u_proj * view_pos;
+    gl_PointSize = in_size * 2.5 / max(1.0, -view_pos.z);
+
+    float twinkle = 0.6 + 0.4 * sin(u_time * in_speed + in_phase);
+    v_color = in_color * (0.95 + 0.05 * in_kind * 0.0);  // use in_kind (prevent opt-out)
+    float rad_factor = 1.0 - 0.02 * in_radial;  // use in_radial (prevent opt-out)
+    v_alpha = in_alpha * twinkle * rad_factor;
+}
+"""
+
+STAR_FS = """#version 330
+in vec3 v_color;
+in float v_alpha;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = gl_PointCoord * 2.0 - 1.0;
+    float d = length(uv);
+    if (d > 1.0) discard;
+    float soft = exp(-d * d * 6.0);
+    fragColor = vec4(v_color, v_alpha * soft);
+}
+"""
+
+SPARK_VS = """#version 330
+uniform mat4 u_proj;
+uniform mat4 u_view;
+uniform float u_time;
+
+in vec3 in_origin;
+in vec3 in_direction;
+in float in_speed;
+in float in_phase_off;
+in float in_particle_size;
+in float in_alpha_val;
+
+out vec3 v_color;
+out float v_alpha;
+
+void main() {
+    // Heartbeat spark burst
+    float period = 60.0 / 72.0;
+    float phase = mod(u_time / period, 1.0);
+    float activation = 0.10 + in_phase_off;
+    float elapsed = phase - activation;
+    float is_active = step(0.0, elapsed);
+
+    float age = clamp(elapsed / 0.30, 0.0, 1.0);
+    float life = 1.0 - age;
+
+    vec3 pos = in_origin + in_direction * in_speed * age * 2.5;
+
+    vec4 view_pos = u_view * vec4(pos, 1.0);
+    gl_Position = u_proj * view_pos;
+
+    float spark_alpha = is_active * smoothstep(0.0, 0.15, life) * (1.0 - smoothstep(0.5, 1.0, age));
+    gl_PointSize = max(0.5, in_particle_size * (1.0 - age * 0.7)) * 2.5 / max(1.0, -view_pos.z);
+
+    // Warm golden-white glow
+    vec3 core_gold = vec3(1.0, 0.85, 0.4);
+    vec3 tip_white = vec3(1.0, 0.95, 0.8);
+    v_color = mix(core_gold, tip_white, age);
+    v_alpha = in_alpha_val * spark_alpha;
+}
+"""
+
+SPARK_FS = """#version 330
+in vec3 v_color;
+in float v_alpha;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = gl_PointCoord * 2.0 - 1.0;
+    float d = length(uv);
+    if (d > 1.0) discard;
+    float soft = exp(-d * d * 4.0);
+    float glow = exp(-d * d * 8.0);
+    vec3 col = v_color * (1.0 + glow * 0.6);
+    fragColor = vec4(col, v_alpha * soft);
+}
+"""
+
+RING_VS = """#version 330
+uniform mat4 u_proj;
+uniform mat4 u_view;
+uniform float u_time;
+
+in vec3 in_position;
+in float in_base_radius;
+in float in_expand_speed;
+in float in_ring_phase;
+
+out vec3 v_color;
+out float v_alpha;
+
+void main() {
+    float period = 60.0 / 72.0;
+    float phase = mod(u_time / period, 1.0);
+
+    float activation = 0.10 + in_ring_phase * 0.05;
+    float ring_age = (phase - activation) / 0.50;
+    ring_age = clamp(ring_age, 0.0, 1.0);
+    float ring_visible = step(activation, phase) * step(0.0, activation + 0.50 - phase);
+
+    // Expand outward using expand_speed and base_radius
+    float expand = 1.0 + ring_age * in_expand_speed;
+    vec3 pos = in_position * expand;
+    float radius_factor = in_base_radius / 2.1;
+
+    vec4 view_pos = u_view * vec4(pos, 1.0);
+    gl_Position = u_proj * view_pos;
+
+    float ring_alpha = (1.0 - ring_age) * 0.35 * ring_visible;
+    gl_PointSize = max(0.5, (3.0 - ring_age * 2.0)) * 2.0 / max(1.0, -view_pos.z);
+
+    // Soft blue-white ring color (theme will be applied via tint in app)
+    vec3 inner_color = vec3(0.8, 0.9, 1.0);
+    vec3 outer_color = vec3(0.5, 0.7, 0.9);
+    v_color = mix(inner_color, outer_color, radius_factor);
+    v_alpha = ring_alpha;
+}
+"""
+
+RING_FS = """#version 330
+in vec3 v_color;
+in float v_alpha;
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = gl_PointCoord * 2.0 - 1.0;
+    float d = length(uv);
+    if (d > 1.0) discard;
+    float soft = exp(-d * d * 3.0);
+    float glow = exp(-d * d * 6.0);
+    vec3 col = v_color * (1.0 + glow * 0.8);
+    fragColor = vec4(col, v_alpha * soft);
+}
+"""
+
+
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -690,31 +825,119 @@ void main() {
 # ═══════════════════════════════════════════════════════════════
 
 class CinematicCamera:
+    """Camera supporting auto-cinematic orbit and manual user control."""
+
+    AUTO = "auto"
+    MANUAL = "manual"
+    TRANSITION = "transition"
+
     def __init__(self) -> None:
         self._view = np.eye(4, dtype="f4")
         self._proj = np.eye(4, dtype="f4")
+        self.mode = self.AUTO
+        self._transition_time = 0.0
+        self._transition_duration = 0.5
 
-    def update(self, elapsed: float, aspect: float):
-        yaw = (0.70 * math.sin(0.12 * elapsed + 1.3)
-               + 0.30 * math.sin(0.27 * elapsed + 0.7)
-               + 0.12 * math.sin(0.45 * elapsed + 3.9))
-        pitch = (0.22 * math.sin(0.15 * elapsed + 2.5)
-                 + 0.08 * math.sin(0.38 * elapsed + 0.3)
-                 + 0.05 * math.sin(0.52 * elapsed + 1.8))
-        radius = 3.50 + 0.55 * math.sin(0.08 * elapsed) + 0.22 * math.sin(0.22 * elapsed + 1.2)
-        target_x = 0.10 * math.sin(0.13 * elapsed + 0.6)
-        target_y = 0.08 * math.sin(0.17 * elapsed + 1.5)
-        target_z = 0.05 * math.sin(0.11 * elapsed + 0.8)
+        # Manual control state
+        self.manual_yaw = 0.0
+        self.manual_pitch = 0.0
+        self.manual_radius = 4.0
+        self.manual_tx = 0.0
+        self.manual_ty = 0.0
+        self.manual_tz = 0.0
 
+        # Auto values (captured during transition)
+        self._auto_yaw = 0.0
+        self._auto_pitch = 0.0
+        self._auto_radius = 4.0
+        self._auto_tx = 0.0
+        self._auto_ty = 0.0
+        self._auto_tz = 0.0
+
+    def switch_mode(self, new_mode: str, elapsed: float) -> None:
+        if new_mode == self.MANUAL and self.mode != self.MANUAL:
+            self._transition_time = elapsed
+            self.mode = self.TRANSITION
+            self._transition_target_mode = self.MANUAL
+        elif new_mode == self.AUTO and self.mode != self.AUTO:
+            self._transition_time = elapsed
+            self.mode = self.TRANSITION
+            self._transition_target_mode = self.AUTO
+        else:
+            self.mode = new_mode
+
+    def set_manual(self, yaw: float, pitch: float, radius: float,
+                   tx: float = 0.0, ty: float = 0.0, tz: float = 0.0) -> None:
+        self.manual_yaw = yaw
+        self.manual_pitch = max(-1.3, min(1.3, pitch))
+        self.manual_radius = max(1.5, min(15.0, radius))
+        self.manual_tx = tx
+        self.manual_ty = ty
+        self.manual_tz = tz
+
+    def reset(self, aspect: float) -> None:
+        """Reset to default position."""
+        self.set_manual(0.0, 0.0, 4.0)
+        self._rebuild(aspect, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0)
+
+    def _rebuild(self, aspect, yaw, pitch, radius, tx, ty, tz):
         eye = np.array([
-            radius * math.cos(pitch) * math.sin(yaw) + target_x,
-            radius * math.sin(pitch) + target_y,
-            radius * math.cos(pitch) * math.cos(yaw) + target_z,
+            radius * math.cos(pitch) * math.sin(yaw) + tx,
+            radius * math.sin(pitch) + ty,
+            radius * math.cos(pitch) * math.cos(yaw) + tz,
         ], dtype="f4")
-        target = np.array([target_x, target_y, target_z], dtype="f4")
+        target = np.array([tx, ty, tz], dtype="f4")
         up = np.array([0.0, 1.0, 0.0], dtype="f4")
         self._view = self._look_at(eye, target, up)
         self._proj = self._perspective(math.radians(42.0), aspect, 0.1, 20.0)
+
+    def update(self, elapsed: float, aspect: float):
+        # Compute auto-cinematic values
+        a_yaw = (0.35 * math.sin(0.12 * elapsed + 1.3)
+                 + 0.15 * math.sin(0.27 * elapsed + 0.7)
+                 + 0.06 * math.sin(0.45 * elapsed + 3.9))
+        a_pitch = (0.10 * math.sin(0.15 * elapsed + 2.5)
+                   + 0.04 * math.sin(0.38 * elapsed + 0.3)
+                   + 0.02 * math.sin(0.52 * elapsed + 1.8))
+        a_radius = (3.50 + 0.55 * math.sin(0.08 * elapsed)
+                    + 0.22 * math.sin(0.22 * elapsed + 1.2))
+        a_tx = 0.05 * math.sin(0.13 * elapsed + 0.6)
+        a_ty = 0.04 * math.sin(0.17 * elapsed + 1.5)
+        a_tz = 0.02 * math.sin(0.11 * elapsed + 0.8)
+
+        if self.mode == self.AUTO:
+            self._rebuild(aspect, a_yaw, a_pitch, a_radius, a_tx, a_ty, a_tz)
+        elif self.mode == self.MANUAL:
+            self._rebuild(aspect, self.manual_yaw, self.manual_pitch,
+                          self.manual_radius, self.manual_tx, self.manual_ty,
+                          self.manual_tz)
+        elif self.mode == self.TRANSITION:
+            t = min(1.0, (elapsed - self._transition_time) / self._transition_duration)
+            t_smooth = t * t * (3.0 - 2.0 * t)  # smoothstep
+            if self._transition_target_mode == self.MANUAL:
+                # From auto to manual: auto values were set when transition started
+                yaw = self._auto_yaw + (self.manual_yaw - self._auto_yaw) * t_smooth
+                pitch = self._auto_pitch + (self.manual_pitch - self._auto_pitch) * t_smooth
+                radius = self._auto_radius + (self.manual_radius - self._auto_radius) * t_smooth
+                tx = self._auto_tx + (self.manual_tx - self._auto_tx) * t_smooth
+                ty = self._auto_ty + (self.manual_ty - self._auto_ty) * t_smooth
+                tz = self._auto_tz + (self.manual_tz - self._auto_tz) * t_smooth
+            else:
+                # From manual to auto
+                yaw = self.manual_yaw + (a_yaw - self.manual_yaw) * t_smooth
+                pitch = self.manual_pitch + (a_pitch - self.manual_pitch) * t_smooth
+                radius = self.manual_radius + (a_radius - self.manual_radius) * t_smooth
+                tx = self.manual_tx + (a_tx - self.manual_tx) * t_smooth
+                ty = self.manual_ty + (a_ty - self.manual_ty) * t_smooth
+                tz = self.manual_tz + (a_tz - self.manual_tz) * t_smooth
+            self._rebuild(aspect, yaw, pitch, radius, tx, ty, tz)
+
+            if t >= 1.0:
+                self.mode = self._transition_target_mode
+        else:
+            # Fallback: treat as auto
+            self.mode = self.AUTO
+            self._rebuild(aspect, a_yaw, a_pitch, a_radius, a_tx, a_ty, a_tz)
 
     @property
     def view(self) -> np.ndarray:
@@ -1007,6 +1230,18 @@ class ParticleHeartV2App:
         self._frame_count = 0
         self._fps_timer = 0.0
         self._fps_value = 0
+        self._paused = False
+        self._start_off = 0.0
+        self._current_theme = args.theme
+        self._target_theme = args.theme
+        self._theme_blend = 0.0
+        # Mouse state
+        self._mouse_buttons = [False, False, False]
+        self._mouse_x = 0.0
+        self._mouse_y = 0.0
+        self._mouse_dx = 0.0
+        self._mouse_dy = 0.0
+        self._scroll_offset = 0.0
 
         if not glfw.init():
             raise RuntimeError("GLFW init failed")
@@ -1037,10 +1272,12 @@ class ParticleHeartV2App:
         self._camera = CinematicCamera()
         self._heartbeat = HeartbeatSystem()
         self._update_fb_state()
+        self._setup_stars()
+        self._setup_sparks()
+        self._setup_rings()
 
     def _setup_particles(self) -> None:
-        noise = BlinnNoise3D(self._args.seed + 1)
-        particles = build_particle_cloud(self._args.seed, noise, self._args.particles)
+        particles = build_particle_cloud(self._args.seed, self._args.particles)
         self._particle_count = particles.shape[0]
 
         self._prog_particles = self._ctx.program(
@@ -1052,6 +1289,7 @@ class ParticleHeartV2App:
         self._u_beat = self._prog_particles["u_beat"]
         self._u_point_scale = self._prog_particles["u_point_scale"]
         self._u_shockwave = self._prog_particles["u_shockwave"]
+        self._u_theme_tint = self._prog_particles["u_theme_tint"]
 
         vbo = self._ctx.buffer(particles.tobytes())
         self._particle_vao = self._ctx.vertex_array(
@@ -1074,6 +1312,53 @@ class ParticleHeartV2App:
         else:
             self._trail = None
 
+    def _setup_stars(self) -> None:
+        rng = np.random.default_rng(self._args.seed + 10)
+        stars = _sample_stars(rng, _BASE_STARS)
+        self._prog_stars = self._ctx.program(vertex_shader=STAR_VS, fragment_shader=STAR_FS)
+        vbo = self._ctx.buffer(stars.tobytes())
+        self._star_vao = self._ctx.vertex_array(
+            self._prog_stars,
+            [(vbo, "3f 3f 1f 1f 1f 1f 1f 1f",
+              "in_position", "in_color", "in_size", "in_phase",
+              "in_kind", "in_radial", "in_alpha", "in_speed")],
+        )
+        self._star_vbo = vbo
+        self._star_u_proj = self._prog_stars["u_proj"]
+        self._star_u_view = self._prog_stars["u_view"]
+        self._star_u_time = self._prog_stars["u_time"]
+
+    def _setup_sparks(self) -> None:
+        rng = np.random.default_rng(self._args.seed + 20)
+        sparks = _sample_sparks(rng, _BASE_SPARKS)
+        self._prog_sparks = self._ctx.program(vertex_shader=SPARK_VS, fragment_shader=SPARK_FS)
+        vbo = self._ctx.buffer(sparks.tobytes())
+        self._spark_vao = self._ctx.vertex_array(
+            self._prog_sparks,
+            [(vbo, "3f 3f 1f 1f 1f 1f",
+              "in_origin", "in_direction", "in_speed",
+              "in_phase_off", "in_particle_size", "in_alpha_val")],
+        )
+        self._spark_vbo = vbo
+        self._spark_u_proj = self._prog_sparks["u_proj"]
+        self._spark_u_view = self._prog_sparks["u_view"]
+        self._spark_u_time = self._prog_sparks["u_time"]
+
+    def _setup_rings(self) -> None:
+        rng = np.random.default_rng(self._args.seed + 30)
+        rings = _sample_rings(rng, _BASE_RINGS)
+        self._prog_rings = self._ctx.program(vertex_shader=RING_VS, fragment_shader=RING_FS)
+        vbo = self._ctx.buffer(rings.tobytes())
+        self._ring_vao = self._ctx.vertex_array(
+            self._prog_rings,
+            [(vbo, "3f 1f 1f 1f",
+              "in_position", "in_base_radius", "in_expand_speed", "in_ring_phase")],
+        )
+        self._ring_vbo = vbo
+        self._ring_u_proj = self._prog_rings["u_proj"]
+        self._ring_u_view = self._prog_rings["u_view"]
+        self._ring_u_time = self._prog_rings["u_time"]
+
     def _update_fb_state(self) -> None:
         w, h = glfw.get_framebuffer_size(self._window)
         w = max(w, 1)
@@ -1092,6 +1377,13 @@ class ParticleHeartV2App:
         w, h = self._fb_size
         aspect = w / h
 
+        # Handle theme transition
+        if self._target_theme != self._current_theme:
+            self._theme_blend = min(1.0, self._theme_blend + 0.03)
+            if self._theme_blend >= 1.0:
+                self._current_theme = self._target_theme
+                self._theme_blend = 0.0
+
         self._camera.update(elapsed, aspect)
         self._heartbeat.update(elapsed)
 
@@ -1102,13 +1394,35 @@ class ParticleHeartV2App:
         bloom_intensity = self._heartbeat.bloom_intensity
         point_scale = min(w, h) / 80.0
 
-        # Pass 1: Scene
+        # Compute active theme tints
+        src = THEMES[self._current_theme]
+        dst = THEMES[self._target_theme]
+        blend = self._theme_blend
+        theme_tints = []
+        for k in range(5):
+            if blend > 0:
+                t = tuple((1 - blend) * src[k][i] + blend * dst[k][i] for i in range(3))
+            else:
+                t = src[k]
+            theme_tints.append(t)
+        self._u_theme_tint.value = tuple(theme_tints)  # tuple of 5 (r,g,b) rows, not flat
+
+        # Pass 1: Scene (with bloom target)
         if self._enable_bloom:
             self._bloom.begin_scene_pass()
         else:
             self._ctx.screen.use()
             self._ctx.viewport = (0, 0, w, h)
             self._ctx.clear(*BACKGROUND, depth=1.0)
+
+        # Starfield background (no depth write, in scene pass)
+        if hasattr(self, '_star_vao'):
+            self._ctx.depth_mask = False
+            self._star_u_proj.write(proj.T.tobytes())
+            self._star_u_view.write(view.T.tobytes())
+            self._star_u_time.value = elapsed
+            self._star_vao.render(moderngl.POINTS)
+            self._ctx.depth_mask = True
 
         self._u_proj.write(proj.T.tobytes())
         self._u_view.write(view.T.tobytes())
@@ -1117,6 +1431,24 @@ class ParticleHeartV2App:
         self._u_point_scale.value = point_scale
         self._u_shockwave.value = shockwave
         self._particle_vao.render(moderngl.POINTS)
+
+        # Render sparks (additive blend)
+        if hasattr(self, '_spark_vao'):
+            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
+            self._spark_u_proj.write(proj.T.tobytes())
+            self._spark_u_view.write(view.T.tobytes())
+            self._spark_u_time.value = elapsed
+            self._spark_vao.render(moderngl.POINTS)
+            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+
+        # Render rings (additive blend)
+        if hasattr(self, '_ring_vao'):
+            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
+            self._ring_u_proj.write(proj.T.tobytes())
+            self._ring_u_view.write(view.T.tobytes())
+            self._ring_u_time.value = elapsed
+            self._ring_vao.render(moderngl.POINTS)
+            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
 
         # Trail accumulation
         if self._trail is not None and self._enable_bloom:
@@ -1131,11 +1463,81 @@ class ParticleHeartV2App:
     def run(self) -> None:
         start = time.perf_counter()
         self._fps_timer = start
+        self._setup_glfw_callbacks()
+        last_key_state = {}
+        _key_repeat_delay = 0.25
+
         while not glfw.window_should_close(self._window):
-            if glfw.get_key(self._window, glfw.KEY_ESCAPE) == glfw.PRESS:
-                glfw.set_window_should_close(self._window, True)
-            if glfw.get_key(self._window, glfw.KEY_SPACE) == glfw.PRESS:
-                self._fps_value = 0  # reset on regen hint (not implemented here)
+            # Keyboard shortcuts (key-down edge detection)
+            for key_name, key_val in [
+                ("ESCAPE", glfw.KEY_ESCAPE), ("SPACE", glfw.KEY_SPACE),
+                ("C", glfw.KEY_C), ("T", glfw.KEY_T),
+                ("1", glfw.KEY_1), ("2", glfw.KEY_2),
+                ("F", glfw.KEY_F), ("R", glfw.KEY_R)
+            ]:
+                pressed = glfw.get_key(self._window, key_val) == glfw.PRESS
+                was_pressed = last_key_state.get(key_name, False)
+                if pressed and not was_pressed:
+                    if key_name == "ESCAPE":
+                        glfw.set_window_should_close(self._window, True)
+                    elif key_name == "SPACE":
+                        self._paused = not self._paused
+                        if self._paused:
+                            self._start_off = time.perf_counter()
+                        else:
+                            start += time.perf_counter() - self._start_off
+                    elif key_name == "C":
+                        new_mode = CinematicCamera.MANUAL if self._camera.mode == CinematicCamera.AUTO else CinematicCamera.AUTO
+                        if new_mode == CinematicCamera.MANUAL:
+                            # Capture current auto values for smooth transition
+                            self._camera._auto_yaw = 0.0
+                            self._camera._auto_pitch = 0.0
+                            self._camera._auto_radius = 4.0
+                            self._camera._auto_tx = 0.0
+                            self._camera._auto_ty = 0.0
+                            self._camera._auto_tz = 0.0
+                        self._camera.switch_mode(new_mode, time.perf_counter() - start)
+                    elif key_name == "T":
+                        self._target_theme = (self._target_theme + 1) % len(THEMES)
+                        self._theme_blend = 0.001
+                    elif key_name == "1":
+                        self._enable_bloom = not self._enable_bloom
+                    elif key_name == "2":
+                        self._enable_trails = not self._enable_trails
+                    elif key_name == "F":
+                        self._show_fps = not self._show_fps
+                    elif key_name == "R":
+                        self._camera.set_manual(0.0, 0.0, 4.0, 0.0, 0.0, 0.0)
+                last_key_state[key_name] = pressed
+
+            # Mouse-driven manual camera
+            if self._camera.mode != CinematicCamera.AUTO:
+                dx = self._mouse_dx
+                dy = self._mouse_dy
+                if self._mouse_buttons[0]:  # Left drag — orbit
+                    yaw = self._camera.manual_yaw - dx * 0.008
+                    pitch = self._camera.manual_pitch + dy * 0.008
+                    self._camera.set_manual(yaw, pitch, self._camera.manual_radius,
+                                            self._camera.manual_tx,
+                                            self._camera.manual_ty,
+                                            self._camera.manual_tz)
+                if self._mouse_buttons[1]:  # Right drag — pan (move target)
+                    tx = self._camera.manual_tx + dx * 0.003
+                    ty = self._camera.manual_ty - dy * 0.003
+                    self._camera.set_manual(self._camera.manual_yaw,
+                                            self._camera.manual_pitch,
+                                            self._camera.manual_radius,
+                                            tx, ty, self._camera.manual_tz)
+                self._mouse_dx = 0.0
+                self._mouse_dy = 0.0
+            if self._scroll_offset != 0.0:
+                r = self._camera.manual_radius - self._scroll_offset * 0.5
+                self._camera.set_manual(self._camera.manual_yaw,
+                                        self._camera.manual_pitch, r,
+                                        self._camera.manual_tx,
+                                        self._camera.manual_ty,
+                                        self._camera.manual_tz)
+                self._scroll_offset = 0.0
 
             elapsed = time.perf_counter() - start
             self.render(elapsed)
@@ -1143,16 +1545,60 @@ class ParticleHeartV2App:
             glfw.poll_events()
             self._frame_count += 1
 
+            # Build window title
+            theme_name = THEME_NAMES[self._target_theme]
+            parts = [WINDOW_TITLE]
             if self._show_fps:
                 now = time.perf_counter()
                 if now - self._fps_timer >= 1.0:
                     self._fps_value = round(self._frame_count / (now - self._fps_timer))
                     self._frame_count = 0
                     self._fps_timer = now
-                    glfw.set_window_title(self._window,
-                                          f"{WINDOW_TITLE}  |  {self._fps_value} fps  |  {self._particle_count} particles")
+                parts.append(f"{self._fps_value} fps")
+            parts.append(f"{self._particle_count} particles")
+            parts.append(f"Theme: {theme_name}")
+            if self._camera.mode != CinematicCamera.AUTO:
+                parts.append("Manual")
+            if self._paused:
+                parts.append("Paused")
+            glfw.set_window_title(self._window, "  |  ".join(parts))
 
         self.close()
+
+    def _setup_glfw_callbacks(self) -> None:
+        """Set up mouse callbacks for interactive camera control."""
+        win = self._window
+
+        def mouse_button_cb(w, button, action, mods):
+            if button < 3:
+                self._mouse_buttons[button] = action == glfw.PRESS
+            if action == glfw.PRESS:
+                self._mouse_dx = 0.0
+                self._mouse_dy = 0.0
+                # If in auto mode, switch to manual on click
+                if self._camera.mode == CinematicCamera.AUTO:
+                    self._camera._auto_yaw = 0.0
+                    self._camera._auto_pitch = 0.0
+                    self._camera._auto_radius = 4.0
+                    self._camera._auto_tx = 0.0
+                    self._camera._auto_ty = 0.0
+                    self._camera._auto_tz = 0.0
+                    self._camera._transition_time = 0.0
+                    self._camera.mode = CinematicCamera.MANUAL
+
+        def cursor_pos_cb(w, xpos, ypos):
+            if any(self._mouse_buttons):
+                self._mouse_dx += xpos - self._mouse_x
+                self._mouse_dy += ypos - self._mouse_y
+            self._mouse_x = xpos
+            self._mouse_y = ypos
+
+        def scroll_cb(w, xoff, yoff):
+            self._scroll_offset += yoff
+
+        glfw.set_mouse_button_callback(win, mouse_button_cb)
+        glfw.set_cursor_pos_callback(win, cursor_pos_cb)
+        glfw.set_scroll_callback(win, scroll_cb)
 
     def self_test(self) -> None:
         for i in range(3):
@@ -1163,12 +1609,13 @@ class ParticleHeartV2App:
 
     def close(self) -> None:
         try:
-            if hasattr(self, "_particle_vao"):
-                self._particle_vao.release()
-            if hasattr(self, "_vbo"):
-                self._vbo.release()
-            if hasattr(self, "_prog_particles"):
-                self._prog_particles.release()
+            for attr in ["_particle_vao", "_vbo", "_prog_particles",
+                         "_star_vao", "_star_vbo", "_prog_stars",
+                         "_spark_vao", "_spark_vbo", "_prog_sparks",
+                         "_ring_vao", "_ring_vbo", "_prog_rings"]:
+                obj = getattr(self, attr, None)
+                if obj is not None:
+                    obj.release()
             if self._bloom is not None:
                 self._bloom.release()
             if self._trail is not None:
@@ -1190,8 +1637,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--width", type=int, default=1280)
     p.add_argument("--height", type=int, default=960)
     p.add_argument("--seed", type=int, default=7)
-    p.add_argument("--particles", type=int, default=200000,
-                   help="Total particle count (default 200000, max ~500000)")
+    p.add_argument("--particles", type=int, default=300000,
+                   help="Total particle count (default 300000, max ~500000)")
     p.add_argument("--bloom", action=argparse.BooleanOptionalAction, default=True,
                    help="Enable HDR bloom post-processing")
     p.add_argument("--trails", action=argparse.BooleanOptionalAction, default=True,
@@ -1199,6 +1646,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fps", action="store_true", help="Show FPS counter in window title")
     p.add_argument("--self-test", action="store_true",
                    help="Headless render test, exit after a few frames")
+    p.add_argument("--theme", type=int, default=0, choices=range(len(THEMES)),
+                   help=f"Color theme: {', '.join(f'{i}={n}' for i,n in enumerate(THEME_NAMES))}")
     return p.parse_args()
 
 

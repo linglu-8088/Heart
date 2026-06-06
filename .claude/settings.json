@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | tr -d '\\r' | { read -r f; if echo \"$f\" | grep -q '\\.py$'; then python -m py_compile \"$f\" && echo \"[py_compile] OK: $f\"; fi; }"
+          }
+        ]
+      }
+    ]
+  }
+}
