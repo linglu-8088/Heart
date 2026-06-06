@@ -58,7 +58,7 @@ THEMES = [
 # Section 1: 2D Parametric Heart Boundary
 # ═══════════════════════════════════════════════════════════════
 
-_HEART_SCALE = 1.0 / 13.0
+_HEART_SCALE = 1.0 / 15.0
 
 
 def heart_boundary(theta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -428,56 +428,41 @@ void main() {
     float shimmer = 0.5 + 0.5 * sin(u_time * (1.2 + in_speed * 0.35) + in_phase);
 
     if (in_kind < 0.5) {
-        // Outline: subtle wobble
-        pos.xy *= 1.0 + pulse * 0.025;
-        pos.z += 0.006 * sin(u_time * 1.8 + in_phase) * (1.0 - edge_lock);
-        pos.z += 0.010 * sin(u_time * 0.75 + in_phase * 0.7);
+        // Outline: pulse + tiny z shimmer
+        pos.xy *= 1.0 + pulse * 0.032;
+        pos.z += 0.008 * sin(u_time * 0.75 + in_phase * 0.7);
     } else if (in_kind < 1.5) {
-        // Shell: gentle breathing
-        float yaw = 0.15 * sin(u_time * 0.72);
-        float pitch = 0.06 * cos(u_time * 0.40);
-        vec3 rot = rot_x(rot_y(pos, yaw), pitch);
-        pos = mix(pos, rot, (1.0 - edge_lock) * 0.20);
-        pos.z += 0.018 * sin(u_time * (1.05 + in_speed * 0.18) + in_phase) * (0.65 - 0.4 * edge_lock);
-        pos.xy *= 1.0 + pulse * 0.020;
+        // Shell: pure uniform pulse
+        pos.xy *= 1.0 + pulse * 0.038;
+        pos.z  *= 1.0 + pulse * 0.045;
     } else if (in_kind < 2.5) {
-        // Fill: expansion + swirl + shockwave
-        float yaw = 0.28 * sin(u_time * 0.78);
-        float pitch = 0.07 * cos(u_time * 0.45);
-        vec3 rot = rot_x(rot_y(pos, yaw), pitch);
-        pos = mix(pos, rot, (1.0 - edge_lock) * 0.35);
-        float swirl = sin(u_time * (1.45 + in_speed * 0.28) + in_phase);
-        pos.x += swirl * 0.02 * core_mix;
-        pos.z += cos(u_time * 1.18 + in_phase) * 0.04 * core_mix;
-        pos.y += sin(u_time * 1.08 + in_phase * 1.2) * 0.012 * core_mix;
-        // Shockwave ripple: radial push
-        pos *= 1.0 + shock * 0.010 * (1.0 - abs(in_radial - 0.5) * 2.0);
-        pos.xy *= 1.0 + pulse * (0.020 + 0.010 * core_mix);
-        pos.z *= 1.0 + pulse * 0.07;
+        // Fill: uniform pulse (stronger at centre)
+        pos.xy *= 1.0 + pulse * (0.045 + 0.025 * core_mix);
+        pos.z  *= 1.0 + pulse * 0.055;
+        pos    *= 1.0 + shock * 0.005 * (1.0 - abs(in_radial - 0.5) * 2.0);
     } else if (in_kind < 3.5) {
-        // Core: strong pulse + burst
-        pos.xy *= 1.0 + pulse * (0.025 + 0.015 * core_mix);
-        pos.z *= 1.0 + pulse * 0.08;
-        pos *= 1.0 + shock * 0.015 * core_mix;
+        // Core: strongest uniform pulse
+        pos.xy *= 1.0 + pulse * (0.055 + 0.035 * core_mix);
+        pos.z  *= 1.0 + pulse * 0.065;
+        pos    *= 1.0 + shock * 0.008 * core_mix;
     } else {
-        // Orbit: figure-8 / circular paths
-        float orbit = u_time * (0.95 + in_speed * 0.45) + in_phase;
+        // Orbit: gentle orbital drift
+        float orbit = u_time * (0.85 + in_speed * 0.40) + in_phase;
         float c = cos(orbit), s = sin(orbit);
         float denom = 1.0 + s * s;
-        // Blend figure-8 with orbital motion based on phase
         float blend = 0.5 + 0.5 * sin(in_phase * 2.7);
         vec3 fig8 = vec3(
-            in_position.x + 0.18 * c / denom,
-            in_position.y + 0.18 * s * c / denom * 0.7,
-            in_position.z + 0.12 * s / denom
+            in_position.x + 0.14 * c / denom,
+            in_position.y + 0.14 * s * c / denom * 0.7,
+            in_position.z + 0.10 * s / denom
         );
         vec3 circ = vec3(
-            in_position.x + 0.06 * cos(orbit),
-            in_position.y + 0.04 * sin(orbit * 1.2),
-            in_position.z + 0.08 * sin(orbit)
+            in_position.x + 0.05 * cos(orbit),
+            in_position.y + 0.03 * sin(orbit * 1.2),
+            in_position.z + 0.06 * sin(orbit)
         );
         pos = mix(circ, fig8, blend);
-        pos *= 1.0 + pulse * 0.04;
+        pos *= 1.0 + pulse * 0.035;
     }
 
     // Camera-space transform
@@ -487,7 +472,7 @@ void main() {
     float depth = -view_pos.z;
     float frontness = saturate(pos.z * 1.15 + 0.5);
     float depth_scale = 1.55 / max(2.0, depth);
-    float pulse_size = 1.0 + pulse * mix(0.09, 0.25, core_mix);
+    float pulse_size = 1.0 + pulse * 0.06;
     float front_size = mix(0.84, 1.22, frontness);
     gl_PointSize = clamp(in_size * u_point_scale * depth_scale * pulse_size * front_size, 1.2, 35.0);
 
@@ -499,11 +484,8 @@ void main() {
     if (in_kind > 3.5) sil_light *= 1.03;
     v_color = in_color * depth_tint * depth_light * sil_light * shim_light * u_theme_tint[int(in_kind)];
 
-    // HDR brightness for bloom extraction
-    v_brightness = 1.0
-        + pulse * core_mix * 2.5
-        + shock * (1.0 - abs(in_radial - shock) * 3.0) * 1.8
-        + core_mix * 0.6;
+    // Gentle centre glow (no flash)
+    v_brightness = 1.0 + core_mix * 0.5;
 
     // Depth fog (mild, to keep particles visible)
     float fog = exp(-depth * 0.08);
@@ -988,15 +970,9 @@ class HeartbeatSystem:
         self.bloom_intensity = 0.0
 
     def update(self, elapsed: float) -> None:
-        phase = (elapsed / self._period) % 1.0
-        p1 = math.exp(-((phase - 0.10) / 0.03) ** 2)
-        p2 = 0.40 * math.exp(-((phase - 0.25) / 0.05) ** 2)
-        p3 = 0.12 * math.exp(-((phase - 0.50) / 0.10) ** 2)
-        self.beat = p1 + p2 + p3
-
-        wave = (phase - 0.10) / 0.30
-        self.shockwave = max(0.0, min(1.0, wave)) * (1.0 if 0.10 <= phase <= 0.40 else 0.0)
-        self.bloom_intensity = 0.35 + 0.55 * self.beat
+        self.beat = 0.5 + 0.5 * math.sin(elapsed * 2.0 * math.pi / self._period)
+        self.shockwave = 0.0
+        self.bloom_intensity = 0.55
 
 
 # ═══════════════════════════════════════════════════════════════
