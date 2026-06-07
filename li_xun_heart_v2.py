@@ -16,19 +16,23 @@ import numpy as np
 WINDOW_TITLE = "3D Particle Heart v2"
 BACKGROUND = (0.015, 0.0, 0.025, 1.0)
 
-# Default particle counts per layer (scaled by --particles factor)
-_BASE_OUTLINE = 40000
-_BASE_SHELL = 50000
-_BASE_FILL = 120000
-_BASE_CORE = 35000
-_BASE_ORBIT = 30000
+# Default particle counts per layer (~50,000 total, scaled by --particles factor)
+_BASE_OUTLINE = 12000
+_BASE_SHELL = 14000
+_BASE_FILL = 32000
+_BASE_CORE = 10000
+_BASE_ORBIT = 14000
 _BASE_TOTAL = _BASE_OUTLINE + _BASE_SHELL + _BASE_FILL + _BASE_CORE + _BASE_ORBIT
 _BASE_STARS = 2000
 _BASE_SPARKS = 5000
 _BASE_RINGS = 2048
 
-# 3D depth scale: max half-thickness at the heart centre, tapers to zero at surface
-_HEART_DEPTH = 0.32
+
+# Body self-rotation speed (rad/s, ~42s per full revolution)
+_ROTATION_SPEED = 0.15
+
+# 3D depth: max Z half-thickness at centre, floor at surface
+_HEART_DEPTH = 0.72
 
 # Color themes: each entry is a list of 5 vec3 tints (outline/shell/fill/core/orbit)
 THEME_NAMES = ["Passion", "Aurora", "Sunset", "Ice", "Neon", "Gold"]
@@ -58,16 +62,14 @@ THEMES = [
 # Section 1: 2D Parametric Heart Boundary
 # ═══════════════════════════════════════════════════════════════
 
+
 _HEART_SCALE = 1.0 / 15.0
 
 
 def heart_boundary(theta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Classic 2D parametric heart curve.
-
-    Returns (x, y) in approx [-1.23, 1.23] x [-1.31, 0.89].
-    Cleft at centre-top, point at bottom.
-    """
-    x = 16.0 * np.sin(theta) ** 3
+    Returns (x, y) in approx [-1.17, 1.17] x [-1.31, 0.89]."""
+    x = 17.5 * np.sin(theta) ** 3
     y = (13.0 * np.cos(theta)
          - 5.0 * np.cos(2.0 * theta)
          - 2.0 * np.cos(3.0 * theta)
@@ -85,6 +87,26 @@ def _heart_outward_normal(theta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     n_len = np.sqrt(tx * tx + ty * ty)
     n_len = np.maximum(n_len, 1e-8)
     return ty / n_len, -tx / n_len
+
+
+def _heart_local_radius(theta):
+    """Local radius of the 2D heart boundary at each theta."""
+    bx, by = heart_boundary(theta)
+    return np.sqrt(bx * bx + by * by)
+
+
+def _z_depth(r_factor, theta, count, rng):
+    """Z depth scaled by local heart radius — wide lobes get thick Z, narrow tip/cleft get thin Z.
+    This makes the 3D shape heart-like from all rotation angles."""
+    local_r = _heart_local_radius(theta)
+    z_scale = np.clip(local_r / 1.25, 0.30, 1.0)
+    base = _HEART_DEPTH * (0.22 + 0.78 * np.power(np.maximum(0.0, 1.0 - r_factor), 0.55))
+    z_max = base * z_scale
+    z_gauss = rng.normal(0.0, z_max * 0.52, count)
+    # D1: additional edge Z spread — centre gets more thickness, edge tapers off
+    # z_extra = (rand*2-1) * (1.0 - nd*0.8) where nd ≈ r_factor
+    z_extra = (rng.random(count) * 2.0 - 1.0) * np.clip(1.0 - r_factor * 0.8, 0.15, 1.0) * 0.15
+    return z_gauss + z_extra
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -111,111 +133,167 @@ def _stack_particles(positions, colors, sizes, phase, kind, distance, alpha, spe
 
 
 def _sample_outline_new(rng, count):
-    theta = np.linspace(0.0, math.tau, count, endpoint=False)
+    # A1: Adaptive theta sampling — 75% uniform + 25% concentrated near bottom tip
+    n_uniform = int(count * 0.72)
+    n_tip = count - n_uniform
+    theta_u = rng.uniform(0.0, math.tau, n_uniform)
+    # Concentrate extra particles around theta=pi (bottom tip) using beta on [0.7pi, 1.3pi]
+    tip_raw = rng.beta(3.5, 3.5, n_tip)  # peak at 0.5
+    theta_tip = 0.7 * math.pi + (1.3 * math.pi - 0.7 * math.pi) * tip_raw
+    theta = np.concatenate([theta_u, theta_tip])
     theta += rng.normal(0.0, 0.015, count)
     base_x, base_y = heart_boundary(theta)
     shell = 0.96 + 0.08 * rng.random(count) + rng.normal(0.0, 0.012, count)
     jitter = rng.normal(0.0, 0.016, (count, 2))
     x = base_x * shell + jitter[:, 0]
     y = base_y * shell + jitter[:, 1]
-    z = rng.normal(0.0, 0.05, count)
+
+    r_factor = np.clip(0.82 + rng.random(count) * 0.22, 0.78, 1.04)
+    z = _z_depth(r_factor, theta, count, rng)
 
     positions = np.column_stack([x, y, z])
     n = count
-    radial = np.clip(0.82 + rng.random(n) * 0.22, 0.78, 1.04)
-    mix = rng.random(n)
-    colors = _lerp_colors(
-        np.array([0.94, 0.14, 0.28], dtype="f4"),
-        np.array([0.98, 0.30, 0.46], dtype="f4"),
-        mix,
-    )
-    sizes = rng.uniform(4.0, 6.5, n)
+    # B1: colour gradient centre→edge: bright red #ff2d55 ➜ deep red #c2185b
+    br = np.array([1.00, 0.18, 0.33], dtype="f4")  # #ff2d55
+    dr = np.array([0.76, 0.09, 0.36], dtype="f4")  # #c2185b
+    nr = np.clip((r_factor - 0.78) / 0.26, 0.0, 1.0)
+    nr += rng.normal(0.0, 0.12, n)
+    nr = np.clip(nr, 0.0, 1.0)
+    colors = _lerp_colors(br, dr, nr)
+    # C1: size tied to r_factor — centre larger, edge smaller
+    size_factor = 0.60 + 0.40 * (1.0 - (r_factor - 0.78) / 0.26)
+    sizes = (2.5 + rng.uniform(0.0, 2.5, n)) * size_factor
     phase = rng.uniform(0.0, math.tau, n)
-    alpha = rng.uniform(0.50, 0.80, n)
+    # C2: edge particles slightly more transparent
+    base_alpha = rng.uniform(0.50, 0.80, n)
+    alpha_factor = 0.72 + 0.28 * (1.0 - (r_factor - 0.78) / 0.26)
+    alpha = base_alpha * alpha_factor
     speed = rng.uniform(0.8, 1.3, n)
-    return _stack_particles(positions, colors, sizes, phase, 0.0, radial, alpha, speed)
+    return _stack_particles(positions, colors, sizes, phase, 0.0, r_factor, alpha, speed)
 
 
 def _sample_shell_new(rng, count):
     theta = rng.uniform(0.0, math.tau, count)
     base_x, base_y = heart_boundary(theta)
-    boundary_factor = 0.28 + 0.68 * (rng.random(count) ** 1.2)
+    r_factor = 0.55 + 0.40 * (rng.random(count) ** 0.55)
     xy_noise = rng.normal(0.0, 0.025, (count, 2))
-    x = base_x * boundary_factor + xy_noise[:, 0]
-    y = base_y * boundary_factor + xy_noise[:, 1]
-
-    z_max = _HEART_DEPTH * np.power(np.maximum(0.0, 1.0 - boundary_factor), 0.45)
-    z = rng.normal(0.0, z_max * 0.42, count)
+    x = base_x * r_factor + xy_noise[:, 0]
+    y = base_y * r_factor + xy_noise[:, 1]
+    z = _z_depth(r_factor, theta, count, rng)
 
     positions = np.column_stack([x, y, z])
     n = count
-    radial = np.clip(boundary_factor * 0.85 + 0.12, 0.18, 0.98)
-    mix = np.clip(0.35 + 0.55 * rng.random(n), 0.0, 1.0)
-    colors = _lerp_colors(
-        np.array([0.96, 0.20, 0.32], dtype="f4"),
-        np.array([0.98, 0.42, 0.52], dtype="f4"),
-        mix,
-    )
-    sizes = rng.uniform(4.5, 7.5, n)
+    # B1: colour gradient centre→edge: bright red → deep red
+    br = np.array([1.00, 0.22, 0.37], dtype="f4")  # bright warm red
+    dr = np.array([0.78, 0.10, 0.34], dtype="f4")  # deep red
+    nr = np.clip(r_factor / 0.95, 0.0, 1.0)
+    nr += rng.normal(0.0, 0.10, n)
+    nr = np.clip(nr, 0.0, 1.0)
+    colors = _lerp_colors(br, dr, nr)
+    # C1: size tied to r_factor — centre larger, edge smaller
+    size_factor = 0.70 + 0.30 * (1.0 - r_factor / 0.95)
+    sizes = rng.uniform(2.0, 4.5, n) * size_factor
     phase = rng.uniform(0.0, math.tau, n)
-    alpha = rng.uniform(0.35, 0.65, n)
+    # C2: edge particles slightly more transparent
+    base_alpha = rng.uniform(0.35, 0.65, n)
+    alpha_factor = 0.72 + 0.28 * (1.0 - r_factor / 0.95)
+    alpha = base_alpha * alpha_factor
     speed = rng.uniform(0.9, 1.6, n)
-    return _stack_particles(positions, colors, sizes, phase, 1.0, radial, alpha, speed)
+    return _stack_particles(positions, colors, sizes, phase, 1.0, r_factor, alpha, speed)
 
 
 def _sample_fill_new(rng, count):
     theta = rng.uniform(0.0, math.tau, count)
     base_x, base_y = heart_boundary(theta)
-    # power 2.5: median bf=0.29 — particles concentrated in deep interior for dense body
-    boundary_factor = 0.02 + 0.86 * (rng.random(count) ** 2.5)
-    xy_noise_scale = 0.025 + 0.030 * (1.0 - boundary_factor)
-    x = base_x * boundary_factor + rng.normal(0.0, xy_noise_scale, count)
-    y = base_y * boundary_factor + rng.normal(0.0, xy_noise_scale, count)
-
-    z_max = _HEART_DEPTH * np.power(np.maximum(0.0, 1.0 - boundary_factor), 0.45)
-    z = rng.normal(0.0, z_max * 0.44, count)
+    r_factor = 0.02 + 0.92 * (rng.random(count) ** 1.4)
+    xy_noise_scale = 0.025 + 0.035 * (1.0 - r_factor)
+    x = base_x * r_factor + rng.normal(0.0, xy_noise_scale, count)
+    y = base_y * r_factor + rng.normal(0.0, xy_noise_scale, count)
+    z = _z_depth(r_factor, theta, count, rng)
 
     positions = np.column_stack([x, y, z])
     n = count
-    radial = np.clip(boundary_factor, 0.0, 1.0)
-    warm_mix = np.clip(boundary_factor * 0.85 + rng.normal(0.0, 0.08, n), 0.0, 1.0)
-    colors = _lerp_colors(
-        np.array([0.98, 0.46, 0.38], dtype="f4"),
-        np.array([0.94, 0.12, 0.28], dtype="f4"),
-        warm_mix,
-    )
-    colors = _lerp_colors(colors, np.array([0.98, 0.54, 0.48], dtype="f4"),
-                          (1.0 - boundary_factor) * 0.12)
-    sizes = rng.uniform(4.0, 7.0, n)
+    # B1: colour gradient centre→edge: bright red #ff2d55 ➜ deep red #c2185b
+    br = np.array([1.00, 0.18, 0.33], dtype="f4")  # #ff2d55
+    dr = np.array([0.76, 0.09, 0.36], dtype="f4")  # #c2185b
+    nr = np.clip(r_factor / 0.94, 0.0, 1.0)
+    nr += rng.normal(0.0, 0.10, n)
+    nr = np.clip(nr, 0.0, 1.0)
+    colors = _lerp_colors(br, dr, nr)
+    # Add a touch of warmth at the very centre
+    warm_tint = np.array([0.98, 0.54, 0.50], dtype="f4")
+    centre_mask = np.clip(1.0 - nr * 2.2, 0.0, 0.22)
+    colors = _lerp_colors(colors, warm_tint, centre_mask)
+    # C1: size tied to r_factor — centre noticeably larger, edge smaller
+    size_factor = 0.55 + 0.45 * (1.0 - r_factor / 0.88)
+    sizes = rng.uniform(1.5, 3.5, n) * size_factor
     phase = rng.uniform(0.0, math.tau, n)
-    alpha = rng.uniform(0.18, 0.38, n)
+    # C2: edge particles visually lighter — stronger gradient for fill layer
+    base_alpha = rng.uniform(0.18, 0.38, n)
+    alpha_factor = 0.65 + 0.35 * (1.0 - r_factor / 0.88)
+    alpha = base_alpha * alpha_factor
     speed = rng.uniform(0.7, 1.5, n)
-    return _stack_particles(positions, colors, sizes, phase, 2.0, radial, alpha, speed)
+    return _stack_particles(positions, colors, sizes, phase, 2.0, r_factor, alpha, speed)
 
 
 def _sample_core_new(rng, count):
-    # Uniform sampling in a 3D ellipsoid (slightly squashed in z)
-    phi = rng.uniform(0.0, math.pi, count)
     theta = rng.uniform(0.0, math.tau, count)
+    phi = rng.uniform(0.0, math.pi, count)
     r = rng.random(count) ** (1.0 / 3.0) * 0.35
-    x = r * np.sin(phi) * np.cos(theta) * 0.95 + rng.normal(0.0, 0.025, count)
-    y = r * np.sin(phi) * np.sin(theta) * 1.08 + rng.normal(0.0, 0.025, count)
+    r_factor = r / 0.35
+    # D2: reshape core from sphere to heart contour using local heart radius
+    local_r = _heart_local_radius(theta)
+    heart_scale = np.clip(local_r / 1.17, 0.50, 1.0)
+    hx = r * np.sin(phi) * np.cos(theta) * 0.95
+    hy = r * np.sin(phi) * np.sin(theta) * 1.08
+    x = hx * heart_scale + rng.normal(0.0, 0.025, count)
+    y = hy * heart_scale + rng.normal(0.0, 0.025, count)
     z = r * np.cos(phi) * 0.75 + rng.normal(0.0, 0.03, count)
 
     positions = np.column_stack([x, y, z])
     n = count
-    radial = np.clip(r / 0.35, 0.0, 0.32)
-    mix = rng.random(n)
-    colors = _lerp_colors(
-        np.array([0.98, 0.40, 0.52], dtype="f4"),
-        np.array([0.99, 0.56, 0.64], dtype="f4"),
-        mix,
-    )
-    sizes = rng.uniform(6.0, 10.0, n)
+    # B1: core colour gradient — bright pink-white centre ➜ warm red edge
+    br = np.array([1.00, 0.69, 0.75], dtype="f4")  # #ffb0bf bright pink
+    dr = np.array([1.00, 0.30, 0.43], dtype="f4")  # #ff4d6d warm red
+    nr = np.clip(r_factor, 0.0, 1.0)
+    nr += rng.normal(0.0, 0.10, n)
+    nr = np.clip(nr, 0.0, 1.0)
+    colors = _lerp_colors(br, dr, nr)
+    # C1: size tied to r_factor — subtler gradient for core (all near centre)
+    size_factor = 0.82 + 0.18 * (1.0 - r_factor)
+    sizes = rng.uniform(3.5, 6.5, n) * size_factor
     phase = rng.uniform(0.0, math.tau, n)
     alpha = rng.uniform(0.35, 0.60, n)
     speed = rng.uniform(1.0, 2.2, n)
-    return _stack_particles(positions, colors, sizes, phase, 3.0, radial, alpha, speed)
+    return _stack_particles(positions, colors, sizes, phase, 3.0, r_factor, alpha, speed)
+
+
+def _sample_trail_orbit(rng, count):
+    """E2: Track particles that sit on the heart contour shell (slightly outside)
+    and drift along it slowly, creating a luminous flowing trail around the heart."""
+    theta = rng.uniform(0.0, math.tau, count)
+    base_x, base_y = heart_boundary(theta)
+    # Scale to sit just outside the outline
+    shell = 1.08 + rng.random(count) * 0.22
+    # Minimal jitter — keep them tight to the contour
+    jitter = rng.normal(0.0, 0.010, (count, 2))
+    x = base_x * shell + jitter[:, 0]
+    y = base_y * shell + jitter[:, 1]
+    # Z offset: spread around the mid-plane
+    z = rng.normal(0.0, _HEART_DEPTH * 0.22, count)
+
+    positions = np.column_stack([x, y, z])
+    n = count
+    # Bright warm gold-white colours for contrast against the red heart
+    gold = np.array([1.00, 0.85, 0.35], dtype="f4")
+    white = np.array([1.00, 0.95, 0.70], dtype="f4")
+    mix = rng.random(n)
+    colors = _lerp_colors(gold, white, mix)
+    sizes = rng.uniform(1.0, 3.0, n)
+    phase = rng.uniform(0.0, math.tau, n)  # orbital phase offset
+    alpha = rng.uniform(0.12, 0.28, n)
+    speed = rng.uniform(0.25, 0.65, n)  # slower than regular orbit — gentle drift
+    return _stack_particles(positions, colors, sizes, phase, 4.5, np.zeros(n), alpha, speed)
 
 
 def _sample_orbit_new(rng, count):
@@ -224,11 +302,11 @@ def _sample_orbit_new(rng, count):
 
     s_val = angle
     denom = 1.0 + np.sin(s_val) ** 2
-    lem_x = 0.85 * np.cos(s_val) / denom
+    lem_x = 0.95 * np.cos(s_val) / denom
     lem_y = 0.55 * np.sin(s_val) * np.cos(s_val) / denom
     lem_z = 0.45 * np.sin(s_val) / denom
 
-    r_circ = rng.uniform(1.15, 2.0, count)
+    r_circ = rng.uniform(1.05, 1.85, count)
     circ_x = r_circ * np.cos(angle)
     circ_y = rng.normal(0.0, 0.35, count)
     circ_z = r_circ * 0.6 * np.sin(angle)
@@ -248,7 +326,7 @@ def _sample_orbit_new(rng, count):
     z[mask_circ] = circ_z[mask_circ]
     if mask_scatter.any():
         sc = mask_scatter.sum()
-        sc_r = rng.uniform(1.2, 2.2, sc)
+        sc_r = rng.uniform(1.1, 2.0, sc)
         sc_a = rng.uniform(0.0, math.tau, sc)
         sc_b = rng.uniform(0.0, math.tau, sc)
         x[mask_scatter] = sc_r * np.cos(sc_a) * np.cos(sc_b)
@@ -261,8 +339,8 @@ def _sample_orbit_new(rng, count):
     radial = np.full(n, 0.15, dtype="f4")
     mix = np.clip(rng.normal(0.5, 0.22, n), 0.0, 1.0)
     colors = _lerp_colors(
-        np.array([1.0, 0.25, 0.22], dtype="f4"),
-        np.array([1.0, 0.65, 0.35], dtype="f4"),
+        np.array([1.0, 0.60, 0.15], dtype="f4"),
+        np.array([1.0, 0.85, 0.30], dtype="f4"),
         mix,
     )
     sizes = rng.uniform(1.5, 4.0, n)
@@ -298,7 +376,7 @@ def _sample_sparks(rng, count):
     jitter = rng.normal(0.0, 0.014, (count, 2))
     x = base_x * shell + jitter[:, 0]
     y = base_y * shell + jitter[:, 1]
-    z = rng.normal(0.0, 0.08, count)
+    z = rng.normal(0.0, _HEART_DEPTH * 0.12, count)
 
     n = count
     dx = nx + rng.normal(0.0, 0.40, n)
@@ -341,6 +419,7 @@ def build_particle_cloud(seed, total_count):
         "fill": max(20000, int(_BASE_FILL * factor)),
         "core": max(3000, int(_BASE_CORE * factor)),
         "orbit": max(8000, int(_BASE_ORBIT * factor)),
+        "trail_orbit": max(2000, int(4000 * factor)),
     }
     adj_total = sum(counts.values())
     if adj_total != total_count:
@@ -348,7 +427,8 @@ def build_particle_cloud(seed, total_count):
 
     print(f"Generating {total_count} particles: "
           f"outline={counts['outline']}, shell={counts['shell']}, "
-          f"fill={counts['fill']}, core={counts['core']}, orbit={counts['orbit']}")
+          f"fill={counts['fill']}, core={counts['core']}, orbit={counts['orbit']}, "
+          f"trail_orbit={counts['trail_orbit']}")
 
     t0 = time.perf_counter()
     layers = [
@@ -357,6 +437,7 @@ def build_particle_cloud(seed, total_count):
         _sample_fill_new(rng, counts["fill"]),
         _sample_core_new(rng, counts["core"]),
         _sample_orbit_new(rng, counts["orbit"]),
+        _sample_trail_orbit(rng, counts["trail_orbit"]),
     ]
     particles = np.vstack(layers).astype("f4")
     rng.shuffle(particles, axis=0)
@@ -390,6 +471,7 @@ uniform float u_time;
 uniform float u_beat;
 uniform float u_point_scale;
 uniform float u_shockwave;
+// uniform float u_rotation;  // disabled — rotation off
 uniform vec3 u_theme_tint[5];
 
 in vec3 in_position;
@@ -421,6 +503,18 @@ vec3 rot_x(vec3 v, float a) {
 
 void main() {
     vec3 pos = in_position;
+
+    // Body: Y-axis self-rotation + breathing wave (excludes orbit)
+    if (in_kind < 3.5) {
+        // pos = rot_y(pos, u_rotation);  // rotation disabled
+        // E1: multi-axis breathing wave for organic feel
+        pos.y += 0.035 * sin(u_time * 1.20 + in_phase * 0.45);
+        pos.x += 0.018 * sin(u_time * 1.50 + in_phase * 0.35 + 0.8);
+        pos.z += 0.015 * cos(u_time * 0.90 + in_phase * 0.50);
+        // Original gentle vertical float (retained, layered on top)
+        pos.y += 0.020 * sin(u_time * 0.65 + in_phase * 0.30);
+    }
+
     float edge_lock = smoothstep(0.78, 1.0, in_radial);
     float core_mix = 1.0 - smoothstep(0.25, 0.95, in_radial);
     float pulse = u_beat;
@@ -445,7 +539,7 @@ void main() {
         pos.xy *= 1.0 + pulse * (0.055 + 0.035 * core_mix);
         pos.z  *= 1.0 + pulse * 0.065;
         pos    *= 1.0 + shock * 0.008 * core_mix;
-    } else {
+    } else if (in_kind < 4.5) {
         // Orbit: gentle orbital drift
         float orbit = u_time * (0.85 + in_speed * 0.40) + in_phase;
         float c = cos(orbit), s = sin(orbit);
@@ -463,6 +557,23 @@ void main() {
         );
         pos = mix(circ, fig8, blend);
         pos *= 1.0 + pulse * 0.035;
+        // Micro-tremor for natural feel
+        pos.x += 0.010 * sin(u_time * 3.5 + in_phase * 5.0);
+        pos.y += 0.010 * cos(u_time * 4.0 + in_phase * 4.5);
+        pos.z += 0.008 * sin(u_time * 3.0 + in_phase * 5.5);
+    } else {
+        // E2: Trail-orbit — slow drift along heart contour shell
+        float drift = u_time * (0.45 + in_speed * 0.30) + in_phase;
+        // Approximate heart-contour-following motion via elliptical oscillation
+        float cx = cos(drift);
+        float sx = sin(drift);
+        pos.x = in_position.x + 0.06 * cx;
+        pos.y = in_position.y + 0.05 * sx * cx * 0.6;
+        pos.z = in_position.z + 0.04 * sx;
+        pos *= 1.0 + pulse * 0.028;
+        // Subtle shimmer
+        pos.x += 0.006 * sin(u_time * 5.0 + in_phase * 7.0);
+        pos.y += 0.006 * cos(u_time * 4.5 + in_phase * 6.0);
     }
 
     // Camera-space transform
@@ -480,16 +591,16 @@ void main() {
     float depth_light = saturate(1.28 - 0.14 * abs(depth));
     float sil_light = mix(0.90, 0.96, edge_lock);
     float shim_light = mix(0.95, 1.04, shimmer);
-    vec3 depth_tint = mix(vec3(0.72, 0.78, 0.96), vec3(1.10, 0.98, 0.92), frontness);
+    vec3 depth_tint = mix(vec3(0.65, 0.72, 0.98), vec3(1.12, 1.00, 0.90), frontness);
     if (in_kind > 3.5) sil_light *= 1.03;
     v_color = in_color * depth_tint * depth_light * sil_light * shim_light * u_theme_tint[int(in_kind)];
 
     // Gentle centre glow (no flash)
-    v_brightness = 1.0 + core_mix * 0.5;
+    v_brightness = 1.0 + core_mix * (0.5 + u_beat * 0.35);
 
     // Depth fog (mild, to keep particles visible)
     float fog = exp(-depth * 0.08);
-    v_alpha = in_alpha * fog * mix(0.85, 1.15, frontness) * mix(0.95, 1.10, shimmer);
+    v_alpha = in_alpha * fog * mix(0.65, 1.25, frontness) * mix(0.90, 1.12, shimmer);
     v_kind = in_kind;
     v_core_mix = core_mix;
     v_seed = in_phase;
@@ -524,18 +635,32 @@ void main() {
 
     float alpha_shape = particle_mask * mix(0.62, 1.0, dense);
     float glow = mix(0.95, 1.06, halo);
+    // B2: radial falloff via pow(1 - radius, exp) — centre bright, edge soft
+    float soft_falloff = 1.0;
 
     if (v_kind < 1.5) {
         alpha_shape *= mix(0.84, 1.0, dense);
         glow = mix(0.96, 1.03, halo);
+        soft_falloff = pow(1.0 - radius, 1.3);  // outline: sharper edge
     } else if (v_kind < 3.5) {
         alpha_shape *= mix(0.86, 1.0, soft);
         glow = mix(0.95, 1.08, halo);
-    } else {
+        soft_falloff = pow(1.0 - radius, 1.8);  // fill/core: softer edge
+    } else if (v_kind < 4.5) {
         alpha_shape *= mix(0.82, 1.0, soft);
-        glow = mix(0.94, 1.10, halo);
+        glow = mix(1.10, 1.30, halo);
+        soft_falloff = pow(1.0 - radius, 1.3);  // orbit: sharper
+    } else {
+        // E2: trail-orbit — brighter, more ethereal glow
+        alpha_shape *= mix(0.76, 1.0, soft);
+        glow = mix(1.20, 1.45, halo);
+        soft_falloff = pow(1.0 - radius, 1.1);  // trail: brightest at centre
     }
+    alpha_shape *= soft_falloff;
     glow *= mix(1.0, 1.06, v_core_mix);
+    // Per-particle glow variation for natural sparkle
+    float glow_var = 0.85 + 0.30 * sin(v_seed * 7.3);
+    glow *= glow_var;
 
     // HDR color: brightness can exceed 1.0 for bloom extraction
     vec3 hdr = v_color * glow * v_brightness;
@@ -874,18 +999,13 @@ class CinematicCamera:
         self._proj = self._perspective(math.radians(42.0), aspect, 0.1, 20.0)
 
     def update(self, elapsed: float, aspect: float):
-        # Compute auto-cinematic values
-        a_yaw = (0.35 * math.sin(0.12 * elapsed + 1.3)
-                 + 0.15 * math.sin(0.27 * elapsed + 0.7)
-                 + 0.06 * math.sin(0.45 * elapsed + 3.9))
-        a_pitch = (0.10 * math.sin(0.15 * elapsed + 2.5)
-                   + 0.04 * math.sin(0.38 * elapsed + 0.3)
-                   + 0.02 * math.sin(0.52 * elapsed + 1.8))
-        a_radius = (3.50 + 0.55 * math.sin(0.08 * elapsed)
-                    + 0.22 * math.sin(0.22 * elapsed + 1.2))
-        a_tx = 0.05 * math.sin(0.13 * elapsed + 0.6)
-        a_ty = 0.04 * math.sin(0.17 * elapsed + 1.5)
-        a_tz = 0.02 * math.sin(0.11 * elapsed + 0.8)
+        # Static camera — no rotation for a stable, full view of the heart
+        a_yaw = 0.0
+        a_pitch = 0.0
+        a_radius = 3.80 + 0.30 * math.sin(elapsed * 0.18 + 0.5) + 0.15 * math.sin(elapsed * 0.31 + 2.1)
+        a_tx = 0.0
+        a_ty = 0.025 * math.sin(elapsed * 0.55)
+        a_tz = 0.0
 
         if self.mode == self.AUTO:
             self._rebuild(aspect, a_yaw, a_pitch, a_radius, a_tx, a_ty, a_tz)
@@ -970,9 +1090,15 @@ class HeartbeatSystem:
         self.bloom_intensity = 0.0
 
     def update(self, elapsed: float) -> None:
-        self.beat = 0.5 + 0.5 * math.sin(elapsed * 2.0 * math.pi / self._period)
-        self.shockwave = 0.0
-        self.bloom_intensity = 0.55
+        # Bimodal lub-dub pulse: two Gaussian peaks per cycle
+        phase = (elapsed % self._period) / self._period
+        p1 = math.exp(-((phase - 0.12) ** 2) / 0.0035)       # "lub" — strong systolic peak
+        p2 = math.exp(-((phase - 0.30) ** 2) / 0.0055) * 0.5  # "dub" — weaker diastolic peak
+        # E3: added micro-rebound after dub
+        p3 = math.exp(-((phase - 0.37) ** 2) / 0.008) * 0.25
+        self.beat = 0.28 + 0.72 * (p1 + p2 + p3 * 0.3)
+        self.shockwave = p1 * 0.85 + p3  # stronger shockwave with dub rebound
+        self.bloom_intensity = 0.45 + 0.25 * (p1 + p2 * 0.6 + p3 * 0.4)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1265,6 +1391,7 @@ class ParticleHeartV2App:
         self._u_beat = self._prog_particles["u_beat"]
         self._u_point_scale = self._prog_particles["u_point_scale"]
         self._u_shockwave = self._prog_particles["u_shockwave"]
+        # self._u_rotation = self._prog_particles["u_rotation"]  # rotation disabled
         self._u_theme_tint = self._prog_particles["u_theme_tint"]
 
         vbo = self._ctx.buffer(particles.tobytes())
@@ -1368,7 +1495,7 @@ class ParticleHeartV2App:
         beat = self._heartbeat.beat
         shockwave = self._heartbeat.shockwave
         bloom_intensity = self._heartbeat.bloom_intensity
-        point_scale = min(w, h) / 80.0
+        point_scale = min(w, h) / 40.0
 
         # Compute active theme tints
         src = THEMES[self._current_theme]
@@ -1406,6 +1533,7 @@ class ParticleHeartV2App:
         self._u_beat.value = beat
         self._u_point_scale.value = point_scale
         self._u_shockwave.value = shockwave
+        # self._u_rotation.value = elapsed * _ROTATION_SPEED  # rotation disabled
         self._particle_vao.render(moderngl.POINTS)
 
         # Render sparks (additive blend)
@@ -1613,8 +1741,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--width", type=int, default=1280)
     p.add_argument("--height", type=int, default=960)
     p.add_argument("--seed", type=int, default=7)
-    p.add_argument("--particles", type=int, default=300000,
-                   help="Total particle count (default 300000, max ~500000)")
+    p.add_argument("--particles", type=int, default=50000,
+                   help="Total particle count (default 50000, max ~500000)")
     p.add_argument("--bloom", action=argparse.BooleanOptionalAction, default=True,
                    help="Enable HDR bloom post-processing")
     p.add_argument("--trails", action=argparse.BooleanOptionalAction, default=True,
