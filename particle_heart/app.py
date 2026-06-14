@@ -308,7 +308,7 @@ class ParticleHeartV2App:
 
         if hasattr(self, "_pedestal_vao"):
             self._ctx.depth_mask = False
-            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
+            self._ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
             self._ped_u_proj.write(proj.T.tobytes())
             self._ped_u_view.write(view.T.tobytes())
             self._ped_u_time.value = elapsed

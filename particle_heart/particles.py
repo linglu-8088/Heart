@@ -407,13 +407,14 @@ def _sample_pedestal(rng, count):
     _max_abs_x = float(np.max(np.abs(_bx)))
     _min_y = float(np.min(_by))
 
-    # --- Golden crystal pedestal with decorative edges and soft halo ---
-    # Circular crystal base with internal glow, decorative rim ring,
-    # and a soft ground halo that naturally bridges into the dark background.
-    count_core = int(count * 0.30)
-    count_rim = int(count * 0.22)
-    count_body = int(count * 0.28)
-    count_skirt = count - count_core - count_rim - count_body
+    # --- Golden crystal pedestal with energy bridge to the heart ---
+    # 5 layers: core (crystal face), rim (decorative ring), body (hourglass),
+    # skirt (ground halo), connector (energy bridge flowing into the heart).
+    count_core = int(count * 0.24)
+    count_rim = int(count * 0.18)
+    count_body = int(count * 0.22)
+    count_skirt = int(count * 0.12)
+    count_conn = count - count_core - count_rim - count_body - count_skirt
 
     R = _max_abs_x * 1.04
     top_core_y = _min_y + 0.010
@@ -421,6 +422,8 @@ def _sample_pedestal(rng, count):
     body_y_lo = _min_y - 0.160
     body_y_hi = _min_y - 0.008
     skirt_y = _min_y - 0.200
+    conn_y_lo = _min_y - 0.010
+    conn_y_hi = _min_y + 0.18
 
     # --- core: dense circular crystal face under the heart ---
     core_theta = rng.uniform(0.0, math.tau, count_core)
@@ -511,18 +514,43 @@ def _sample_pedestal(rng, count):
         0.80 + 0.20 * (1.0 - skirt_dist)
     )
 
-    x = np.concatenate([core_x, rim_x, body_x, skirt_x])
-    y = np.concatenate([core_y, rim_y, body_y, skirt_yv])
-    z = np.concatenate([core_z, rim_z, body_z, skirt_z])
-    sizes = np.concatenate([core_sizes, rim_sizes, body_sizes, skirt_sizes])
+    # --- connector: energy bridge flowing from pedestal top into the heart ---
+    # Vertical streams of red-gold particles that spiral upward, forming
+    # a living connection between the crystal base and the heart above.
+    conn_y = rng.uniform(conn_y_lo, conn_y_hi, count_conn)
+    conn_t = (conn_y - conn_y_lo) / (conn_y_hi - conn_y_lo + 1e-8)
+    # Width narrows as streams rise: wide at base, focused at heart
+    conn_spread = R * (0.46 - 0.24 * conn_t)
+    conn_r = rng.random(count_conn) ** 0.60
+    conn_theta = rng.uniform(0.0, math.tau, count_conn)
+    conn_x = conn_r * np.cos(conn_theta) * conn_spread
+    conn_z = conn_r * np.sin(conn_theta) * conn_spread
+    conn_dist = np.sqrt(
+        (conn_x / (conn_spread + 1e-8)) ** 2
+        + (conn_z / (conn_spread + 1e-8)) ** 2
+    )
+    conn_alpha = np.clip(
+        (0.22 + 0.32 * (1.0 - conn_dist)) * (1.0 - conn_t * 0.45)
+        + rng.normal(0.0, 0.015, count_conn),
+        0.10, 0.58,
+    )
+    conn_sizes = rng.uniform(4.0, 7.0, count_conn) * (
+        0.82 + 0.18 * (1.0 - conn_dist) - conn_t * 0.20
+    )
+
+    x = np.concatenate([core_x, rim_x, body_x, skirt_x, conn_x])
+    y = np.concatenate([core_y, rim_y, body_y, skirt_yv, conn_y])
+    z = np.concatenate([core_z, rim_z, body_z, skirt_z, conn_z])
+    sizes = np.concatenate([core_sizes, rim_sizes, body_sizes, skirt_sizes, conn_sizes])
     phases = rng.uniform(0.0, math.tau, count)
     layers = np.concatenate([
         np.full(count_core, 0.0),
         np.full(count_rim, 1.0),
         np.full(count_body, 2.0),
         np.full(count_skirt, 3.0),
+        np.full(count_conn, 4.0),
     ])
-    alphas = np.concatenate([core_alpha, rim_alpha, body_alpha, skirt_alpha])
+    alphas = np.concatenate([core_alpha, rim_alpha, body_alpha, skirt_alpha, conn_alpha])
 
     result = np.column_stack([
         x.astype("f4"),

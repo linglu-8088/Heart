@@ -5,7 +5,7 @@ BASE_STARS = 3000
 BASE_SPARKS = 5000
 
 QUALITY_PARTICLE_COUNTS = {"low": 40000, "medium": 70000, "high": 90000}
-PEDESTAL_COUNTS = {"low": 6000, "medium": 10000, "high": 14000}
+PEDESTAL_COUNTS = {"low": 7500, "medium": 12000, "high": 16500}
 QUALITY_DEFAULTS = {
     "low": {"bloom": True, "trails": False},
     "medium": {"bloom": True, "trails": True},

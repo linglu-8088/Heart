@@ -554,26 +554,42 @@ void main() {
     float pulse = u_beat;
     int layer = int(in_layer + 0.5);
 
-    // Crystal heartbeat — gentle but clear pulse through the gem body
-    float layer_pulse_xy = mix(0.026, 0.008, in_layer / 3.0);
-    float layer_pulse_z  = mix(0.034, 0.010, in_layer / 3.0);
-    pos.xy *= 1.0 + pulse * layer_pulse_xy;
-    pos.z  *= 1.0 + pulse * layer_pulse_z;
-
-    // Per-layer breathing: warm, slow drift like light refracting through crystal
-    float breath_speed = (layer == 0) ? 0.70 : (layer == 1) ? 0.85 : 0.50;
-    float breath_amp   = (layer == 0) ? 0.005 : (layer == 1) ? 0.006 : 0.003;
-    pos.y += sin(u_time * breath_speed + in_phase * 2.1) * breath_amp;
-
-    // Subtle radial breathing — crystal seems to pulse with internal light
-    float expand = sin(u_time * 0.90 + in_phase * 1.3) * 0.003;
-    pos.x += pos.x * expand;
-    pos.z += pos.z * expand;
-
-    float flow = sin(u_time * 0.30 + in_phase) * 0.002;
-    float ca = cos(flow), sa = sin(flow);
-    pos.x = in_position.x * ca - in_position.z * sa;
-    pos.z = in_position.x * sa + in_position.z * ca;
+    if (layer == 4) {
+        // --- Energy connector: flowing streams from pedestal to heart ---
+        float t = saturate((in_position.y + 0.010) / 0.19);
+        float stream_speed = 1.8 + in_phase * 0.4;
+        float spiral = u_time * stream_speed + in_phase * 6.28;
+        float spiral_r = 0.012 * (1.0 - t * 0.6);
+        pos.x += cos(spiral) * spiral_r;
+        pos.z += sin(spiral) * spiral_r;
+        // Upward flow animation
+        pos.y += sin(u_time * 2.5 + in_phase * 4.0) * 0.008 * (1.0 - t);
+        // Radial pulse synced to heartbeat
+        pos.xy *= 1.0 + pulse * 0.018 * (1.0 - t);
+        // Slight horizontal sway
+        pos.x += sin(u_time * 1.1 + in_phase * 3.0) * 0.006 * (1.0 - t);
+        pos.z += cos(u_time * 0.9 + in_phase * 3.5) * 0.005 * (1.0 - t);
+    } else {
+        // Crystal heartbeat — gentle but clear pulse through the gem body
+        float lp = min(in_layer, 3.0);
+        float layer_pulse_xy = mix(0.026, 0.008, lp / 3.0);
+        float layer_pulse_z  = mix(0.034, 0.010, lp / 3.0);
+        pos.xy *= 1.0 + pulse * layer_pulse_xy;
+        pos.z  *= 1.0 + pulse * layer_pulse_z;
+        // Per-layer breathing
+        float breath_speed = (layer == 0) ? 0.70 : (layer == 1) ? 0.85 : 0.50;
+        float breath_amp   = (layer == 0) ? 0.005 : (layer == 1) ? 0.006 : 0.003;
+        pos.y += sin(u_time * breath_speed + in_phase * 2.1) * breath_amp;
+        // Subtle radial breathing
+        float expand = sin(u_time * 0.90 + in_phase * 1.3) * 0.003;
+        pos.x += pos.x * expand;
+        pos.z += pos.z * expand;
+        // Slow rotation
+        float flow = sin(u_time * 0.30 + in_phase) * 0.002;
+        float ca = cos(flow), sa = sin(flow);
+        pos.x = in_position.x * ca - in_position.z * sa;
+        pos.z = in_position.x * sa + in_position.z * ca;
+    }
 
     vec4 view_pos = u_view * vec4(pos, 1.0);
     gl_Position = u_proj * view_pos;
@@ -582,29 +598,49 @@ void main() {
     float frontness = saturate(pos.z * 1.15 + 0.5);
     float depth_scale = 1.55 / max(2.0, depth);
     float pulse_size = 1.0 + pulse * 0.032;
-    float layer_size = 1.0 + (3.0 - in_layer) * 0.12;
+
+    vec3 base_color;
+    float layer_size;
+    float final_alpha;
+
+    if (layer == 4) {
+        // Connector: golden-red gradient based on height
+        float t = saturate((in_position.y + 0.010) / 0.19);
+        vec3 gold_conn = vec3(1.00, 0.72, 0.28);
+        vec3 red_conn  = vec3(1.00, 0.22, 0.35);
+        base_color = mix(gold_conn, red_conn, t * t);
+        // Upward flow glow — brighter near the heart
+        float flow_glow = 1.0 + t * 0.45;
+        float shimmer = 0.5 + 0.5 * sin(u_time * 2.2 + in_phase * 3.0);
+        base_color *= flow_glow * mix(0.92, 1.10, shimmer);
+        // Warm depth tint
+        vec3 conn_dt = mix(vec3(0.88, 0.70, 0.50), vec3(1.10, 0.90, 0.72), frontness);
+        base_color *= conn_dt * saturate(1.24 - 0.06 * abs(depth));
+        layer_size = 1.0;
+        final_alpha = in_alpha * mix(0.90, 1.14, frontness) * mix(0.88, 1.12, shimmer);
+    } else {
+        base_color = u_ped_tint[layer];
+        // Golden shimmer — warm, gem-like sparkle
+        float shimmer = 0.5 + 0.5 * sin(u_time * 1.4 + in_phase * 1.8);
+        float shim_light = mix(0.94, 1.08, shimmer);
+        // Warm golden depth tint
+        vec3 depth_tint = mix(vec3(0.85, 0.72, 0.55), vec3(1.12, 1.00, 0.78), frontness);
+        float depth_light = saturate(1.28 - 0.06 * abs(depth));
+        // Layer-specific glow
+        float glow_mult = (layer == 0) ? 1.20 : (layer == 1) ? 1.35 : (layer == 2) ? 1.05 : 0.92;
+        // Center glow
+        float cd = min(1.0, length(in_position.xz) / 0.40);
+        float center_glow = mix(glow_mult, 1.0, cd);
+        base_color = base_color * depth_tint * depth_light * shim_light * center_glow;
+        layer_size = 1.0 + (3.0 - min(in_layer, 3.0)) * 0.12;
+        final_alpha = in_alpha * mix(0.86, 1.16, frontness) * mix(0.94, 1.06, shimmer);
+    }
+
     float front_size = mix(0.94, 1.14, frontness);
     gl_PointSize = clamp(in_size * depth_scale * pulse_size * layer_size * front_size, 1.5, 36.0);
 
-    vec3 base_color = u_ped_tint[layer];
-
-    // Golden shimmer — warm, gem-like sparkle
-    float shimmer = 0.5 + 0.5 * sin(u_time * 1.4 + in_phase * 1.8);
-    float shim_light = mix(0.94, 1.08, shimmer);
-
-    // Warm golden depth tint — crystal refracts warm light
-    vec3 depth_tint = mix(vec3(0.85, 0.72, 0.55), vec3(1.12, 1.00, 0.78), frontness);
-    float depth_light = saturate(1.28 - 0.06 * abs(depth));
-
-    // Layer-specific glow: core brightest, rim sparkles, body soft, skirt faint
-    float glow_mult = (layer == 0) ? 1.20 : (layer == 1) ? 1.35 : (layer == 2) ? 1.05 : 0.92;
-
-    // Center glow — internal light source radiating from the crystal core
-    float cd = min(1.0, length(in_position.xz) / 0.40);
-    float center_glow = mix(glow_mult, 1.0, cd);
-
-    v_color = base_color * depth_tint * depth_light * shim_light * center_glow;
-    v_alpha = in_alpha * mix(0.86, 1.16, frontness) * mix(0.94, 1.06, shimmer);
+    v_color = base_color;
+    v_alpha = final_alpha;
     v_seed = in_phase;
     v_layer = in_layer;
 }
@@ -625,21 +661,34 @@ void main() {
     float radius = sqrt(r2);
     float angle = atan(uv.y, uv.x);
 
+    int layer = int(v_layer + 0.5);
+
+    float alpha_shape;
+    float glow;
+    float core = exp(-r2 * 6.0);
+    float body_glow = exp(-r2 * 2.5);
+    float halo = exp(-r2 * 1.2);
+
+    if (layer == 4) {
+        // --- Energy connector: soft glowing stream particle ---
+        float soft = exp(-r2 * 3.0);
+        float stream_halo = exp(-r2 * 1.0);
+        alpha_shape = mix(0.40, 1.0, soft) * pow(1.0 - radius, 1.4);
+        glow = 0.95 + soft * 0.35 + stream_halo * 0.18;
+        // Additive warm glow core
+        vec3 warm_core = vec3(1.0, 0.60, 0.25) * exp(-r2 * 8.0) * 0.22;
+        vec3 warm_halo = vec3(1.0, 0.35, 0.20) * stream_halo * 0.08;
+        vec3 hdr = v_color * glow + warm_core + warm_halo;
+        fragColor = vec4(hdr, v_alpha * alpha_shape);
+        return;
+    }
+
     // Crystal-cut edge — slightly faceted, gem-like
     float facet = 0.92
         + 0.04 * sin(angle * 6.0 + v_seed * 2.0)
         + 0.02 * sin(angle * 10.0 - v_seed * 1.4)
         + 0.01 * sin(angle * 14.0 + v_seed * 2.8);
     float crystal_edge = 1.0 - smoothstep(facet - 0.08, facet, radius);
-
-    // Multi-layer glow: core, body, halo
-    float core = exp(-r2 * 6.0);
-    float body = exp(-r2 * 2.5);
-    float halo = exp(-r2 * 1.2);
-
-    int layer = int(v_layer + 0.5);
-    float alpha_shape;
-    float glow;
 
     if (layer == 0) {
         // Crystal face — dense core with internal golden light
@@ -651,11 +700,11 @@ void main() {
         glow = 1.10 + core * 0.50 + halo * 0.10;
     } else if (layer == 2) {
         // Crystal body — translucent, internal glow visible through volume
-        alpha_shape = mix(0.48, 1.0, body) * pow(1.0 - radius, 1.30);
+        alpha_shape = mix(0.48, 1.0, body_glow) * pow(1.0 - radius, 1.30);
         glow = 0.95 + core * 0.28 + halo * 0.14;
     } else {
         // Ground halo — very soft, wide golden glow on the floor
-        alpha_shape = mix(0.32, 1.0, body) * pow(1.0 - radius, 1.70);
+        alpha_shape = mix(0.32, 1.0, body_glow) * pow(1.0 - radius, 1.70);
         glow = 0.88 + core * 0.18 + halo * 0.16;
     }
 
